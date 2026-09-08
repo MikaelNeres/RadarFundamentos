@@ -1,0 +1,27 @@
+name: Radar IDIV CVM Daily
+
+on:
+  schedule:
+    # Horário em UTC (Brasília é UTC-3. Para rodar às 19:00 no Brasil, configuramos para 22:00 UTC)
+    - cron: '0 22 * * *'
+  workflow_dispatch: # Permite que você clique em um botão para testar manual a qualquer hora
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copiando o código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurando o ambiente Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalando as bibliotecas (pandas e requests)
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Executando o Robô do Radar
+        run: python bot.py
