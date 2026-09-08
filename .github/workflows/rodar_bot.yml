@@ -24,9 +24,5 @@ jobs:
 
       - name: Executando o Robô do Radar
         run: |
-          python -m pip install --upgrade pip
+          cd RadarFundamentos || true
           python bot.py
-          pip install -r requirements.txt
-
-      - name: Executando o Robô do Radar
-        run: python bot.py
