@@ -14,68 +14,39 @@ def enviar_alerta_telegram(mensagem):
         "parse_mode": "Markdown"
     }
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Erro ao enviar no Telegram: {e}")
+        print(f"Erro no Telegram: {e}")
 
-def buscar_fatos_relevantes_avancado():
-    print("Iniciando varredura avançada de Fatos Relevantes e Gatilhos...")
+def executar_radar():
+    print("Iniciando varredura por Ticker...")
     
-    # URL de Fatos Relevantes e Comunicados da CVM (base atualizada)
+    # URL dos Fatos Relevantes da CVM (ex: FPE)
     url_cvm = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FPE/DADOS/fpe_cia_aberta_2026.csv"
     
     try:
-        # Lendo a base da CVM
         tabela_cvm = pd.read_csv(url_cvm, sep=';', encoding='latin1')
         
-        # 1. NOSSO RADAR DE EMPRESAS (Foco em Dividendos e DIVO11 / NDIV11)
-        empresas_radar = [
-            'ITAUSA', 'BB SEGURIDADE', 'PETROBRAS', 'COPEL', 
-            'BRADESCO', 'ITAU UNIBANCO', 'VALE', 'BANCO DO BRASIL', 
-            'VIBRA ENERGIA', 'CEMIG', 'COPASA', 'TIM', 'ALLOS', 
-            'MARFRIG', 'ISA ENERGIA', 'CAIXA SEGURIDADE', 'CSN MINERAÇÃO', 
-            'TAESA', 'FLEURY', 'CPFL ENERGIA', 'BRADESPAR', 'CURY', 
-            'DIRECIONAL', 'MARCOPOLO', 'PETRORECONCAVO', 'BANRISUL', 
-            'JHSF', 'UNIPAR', 'ENGIE', 'TELEFONICA'
-        ]
+        # Lista focada nos Tickers principais ou códigos CVM das "vacas leiteiras"
+        # Dica: Na CVM o ideal é mapear os tickers ou os nomes oficiais exatos de pregão
+        tickers_radar = ['ITSA4', 'BBSE3', 'PETR4', 'TAEE11', 'EGIE3']
+        gatilhos_valor = ['RECOMPRA', 'DIVIDENDOS', 'JCP', 'PROVENTOS']
         
-        # 2. GATILHOS AVANÇADOS DE VALOR E GOVERNANÇA
-        gatilhos_valor = [
-            'RECOMPRA', 'AQUISICAO DE ACOES', 'PROGRAMA DE RECOMPRA',
-            'DIVIDENDOS', 'JUROS SOBRE O CAPITAL', 'JCP',
-            'INSIDER', 'DIRETORIA', 'GESTAO', 'AUMENTO DE CAPITAL'
-        ]
-        
-        contador_alertas = 0
-        
-        # Varrendo as linhas da CVM de forma inteligente
+        contador = 0
         for index, linha in tabela_cvm.iterrows():
-            empresa = str(linha.get('NOME_EMPRESA', '')).upper()
+            # Verificamos se a coluna de Ticker/Código bate com o nosso radar
+            ticker = str(linha.get('DENOM_SOCIAL', '')).upper() # Ou coluna de código equivalente na base
             assunto = str(linha.get('ASSUNTO', '')).upper()
-            descricao = str(linha.get('DESCRICAO', '')).upper()
             
-            # Cruzando o radar de empresas com os gatilhos avançados
-            empresa_match = any(ticker in empresa for ticker in empresas_radar)
-            gatilho_match = any(gatilho in assunto or gatilho in descricao for gatilho in gatilhos_valor)
-            
-            if empresa_match and gatilho_match:
-                alerta = (
-                    f"🎯 *ALERTA DE ASSIMETRIA – RADAR B3* 🎯\n\n"
-                    f"🏢 *Empresa:* {empresa}\n"
-                    f"📄 *Assunto:* {assunto}\n"
-                    f"💡 *Foco:* Monitorar impacto imediato no Dividend Yield e Payout."
-                )
-                enviar_alerta_telegram(alerta)
-                contador_alertas += 1
+            # Filtro refinado
+            if any(t in ticker for t in tickers_radar) and any(g in assunto for g in gatilhos_valor):
+                enviar_alerta_telegram(f"🎯 *ALERTA IDIV (Ticker)* \n🏢 *Empresa:* {ticker}\n📄 *Assunto:* {assunto}")
+                contador += 1
                 
-        print(f"Varredura concluída. Alertas de valor disparados: {contador_alertas}")
+        print(f"Varredura por Ticker concluída. Alertas enviados: {contador}")
         
     except Exception as e:
-        print(f"Aviso na leitura de Fatos Relevantes: {e}")
-        # Mensagem de contingência caso o arquivo do dia ainda não tenha sido publicado na CVM
-        enviar_alerta_telegram("🤖 *Radar B3:* Varredura executada. Nenhum fato relevante fora da curva para os gatilhos de dividendos/recompra no momento.")
+        print(f"Erro na execução: {e}")
 
 if __name__ == "__main__":
-    print("Robô com Filtros Avançados ativado...")
-    enviar_alerta_telegram("🚀 *Radar B3 Avançado:* Módulos de Recompra e Dividendos ativados com sucesso!")
-    buscar_fatos_relevantes_avancado()
+    executar_radar()
