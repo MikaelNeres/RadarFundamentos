@@ -1,28 +1,27 @@
-name: Radar IDIV CVM Daily
+name: Executando o Robô do Radar
 
 on:
+  workflow_dispatch: # Permite rodar manualmente
   schedule:
-    - cron: '0 22 * * *'
-  workflow_dispatch:
+    - cron: '0 22 * * *' # Roda todo dia às 19:00 de Brasília
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Copiando o código do repositório
+      - name: Checkout do Repositório
         uses: actions/checkout@v4
 
-      - name: Configurando o ambiente Python
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      - name: Instalando as bibliotecas
+      - name: Instalar Dependências
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Executando o Robô do Radar
-        run: |
-          cd RadarFundamentos || true
-          python bot.py
+      - name: Executar o Bot
+        run: python bot.py
