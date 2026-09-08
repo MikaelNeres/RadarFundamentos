@@ -8,7 +8,7 @@ warnings.filterwarnings('ignore') # Ignora avisos do pandas
 # CONFIGURAÇÕES DO BOT
 # ==============================================================================
 TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
-CHAT_ID = ''566929604'
+CHAT_ID = '566929604'
 
 MEUS_PAPEIS = [
     {"ticker": "CMIG4", "nome": "CEMIG"},
