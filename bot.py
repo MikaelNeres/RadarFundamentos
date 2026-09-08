@@ -40,54 +40,52 @@ def enviar_telegram(mensagem, ticker=None):
             ]]
         }
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram status para {ticker or 'Geral'}: {r.status_code} - Resposta: {r.text}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Erro no envio do Telegram: {e}")
 
-def executar_radar_yf():
+def executar_radar_vigentes():
     mes_ano = datetime.now().strftime("%b/%y").upper()
+    hoje = datetime.now()
     total_alertas = 0
     
-    print("Iniciando varredura via yfinance...")
-    enviar_telegram(f"🤖 *Radar IDIV | {mes_ano}*\nVarredura via YFinance iniciada na nuvem.")
+    print("Iniciando varredura de proventos vigentes...")
+    enviar_telegram(f"🤖 *Radar IDIV | {mes_ano}*\nVarredura de proventos com Data COM vigente iniciada...")
 
     for papel in MEUS_PAPEIS:
         ticker_base = papel["ticker"]
         nome = papel["nome"]
         ticker_yf = f"{ticker_base}.SA"
         
-        print(f"Consultando yfinance para: {ticker_yf}")
-        
         try:
             acao = yf.Ticker(ticker_yf)
             dividendos = acao.dividends
             
-            print(f"Total de registros de dividendos encontrados para {ticker_base}: {len(dividendos)}")
-            
             if not dividendos.empty:
-                # Pega a última linha (o provento mais recente registrado)
-                ultima_data = dividendos.index[-1].strftime('%d/%m/%Y')
-                ultimo_valor = dividendos.iloc[-1]
+                # Converte o índice do yfinance para datetime sem fuso horário para comparação segura
+                dividendos.index = pd.to_datetime(dividendos.index).tz_localize(None)
                 
-                print(f"Último provento de {ticker_base}: Data {ultima_data}, Valor {ultimo_valor}")
+                # Filtra apenas proventos cuja Data COM seja de hoje em diante (vigentes)
+                proventos_vigentes = dividendos[dividendos.index >= hoje]
                 
-                msg = (
-                    f"#{ticker_base} | {mes_ano} | {nome}\n\n"
-                    f"💰 *PROVENTO RECENTE (YFinance):*\n"
-                    f"💵 Valor: R$ {ultimo_valor:.4f}\n"
-                    f"📅 Data Base (COM): {ultima_data}"
-                )
-                enviar_telegram(msg, ticker_base)
-                total_alertas += 1
-            else:
-                print(f"Nenhum dividendo retornado pelo yfinance para {ticker_base}")
-                
+                for data_com, valor in proventos_vigentes.items():
+                    data_com_str = data_com.strftime('%d/%m/%Y')
+                    
+                    msg = (
+                        f"#{ticker_base} | {mes_ano} | {nome}\n\n"
+                        f"💰 *PROVENTO COM DATA COM VIGENTE:*\n"
+                        f"💵 *Valor Declarado:* R$ {valor:.4f} por ação\n"
+                        f"📅 *Data COM:* {data_com_str}"
+                    )
+                    enviar_telegram(msg, ticker_base)
+                    total_alertas += 1
+                    
         except Exception as e:
-            print(f"Erro crítico ao processar {ticker_base}: {e}")
+            print(f"Erro ao processar {ticker_base}: {e}")
             
-    enviar_telegram(f"✅ *Varredura Concluída!*\nTotal de alertas enviados: {total_alertas}")
-    print(f"Varredura concluída. {total_alertas} avisos enviados.")
+    print(f"Varredura concluída. {total_alertas} proventos vigentes encontrados.")
+    if total_alertas == 0:
+        enviar_telegram("✅ *Radar IDIV:* Nenhuma nova Data COM vigente mapeada para os ativos monitorados no momento.")
 
 if __name__ == "__main__":
-    executar_radar_yf()
+    executar_radar_vigentes()
