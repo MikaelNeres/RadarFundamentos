@@ -8,15 +8,39 @@ warnings.filterwarnings('ignore') # Ignora avisos do pandas
 # CONFIGURAÇÕES DO BOT
 # ==============================================================================
 TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
-CHAT_ID = 'SEU_CHAT_ID_AQUI'
+CHAT_ID = ''566929604'
 
 MEUS_PAPEIS = [
+    {"ticker": "CMIG4", "nome": "CEMIG"},
+    {"ticker": "SAPR11", "nome": "SANEPAR"},
+    {"ticker": "ISAE4", "nome": "ISA ENERGIA BRASIL"},
+    {"ticker": "ABCB4", "nome": "BANCO ABC BRASIL"},
+    {"ticker": "LOGG3", "nome": "LOG COMMERCIAL PROPERTIES"},
+    {"ticker": "BBAS3", "nome": "BANCO DO BRASIL"},
+    {"ticker": "FIQE3", "nome": "UNIFIQUE"},
+    {"ticker": "GGBR4", "nome": "GERDAU"},
+    {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
+    {"ticker": "SAUD3", "nome": "BRADSAÚDE"},
+    {"ticker": "DEXP3", "nome": "DEXCO"},
     {"ticker": "ITSA4", "nome": "ITAUSA"},
     {"ticker": "BBSE3", "nome": "BB SEGURIDADE"},
     {"ticker": "PETR4", "nome": "PETROBRAS"},
-    {"ticker": "EGIE3", "nome": "ENGIE BRASIL"},
-    {"ticker": "TAEE11", "nome": "TAESA"}
-    # Adicione o restante dos seus 30 ativos aqui...
+    {"ticker": "ITUB4", "nome": "BANCO ITAU UNIBANCO"},
+    {"ticker": "CPLE3", "nome": "COPEL"},
+    {"ticker": "BBDC4", "nome": "BRADESCO"},
+    {"ticker": "VALE3", "nome": "VALE"},
+    {"ticker": "CSMG3", "nome": "COPASA"},
+    {"ticker": "TIMS3", "nome": "TIM"},
+    {"ticker": "ALOS3", "nome": "ALLOS"},
+    {"ticker": "CXSE3", "nome": "CAIXA SEGURIDADE"},
+    {"ticker": "CMIN3", "nome": "CSN MINERAÇÃO"},
+    {"ticker": "TAEE11", "nome": "TAESA"},
+    {"ticker": "FLRY3", "nome": "FLEURY"},
+    {"ticker": "CPFE3", "nome": "CPFL ENERGIA"},
+    {"ticker": "BRAP4", "nome": "BRADESPAR"},
+    {"ticker": "CURY3", "nome": "CURY CONSTRUTORA"},
+    {"ticker": "DIRR3", "nome": "DIRECIONAL ENGENHARIA"},
+    {"ticker": "POMO4", "nome": "MARCOPOLO"}
 ]
 
 def enviar_alerta_telegram(mensagem):
