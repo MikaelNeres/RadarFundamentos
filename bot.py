@@ -1,3 +1,4 @@
+import os
 import requests
 import pandas as pd
 import yfinance as yf
@@ -87,5 +88,75 @@ def executar_radar_vigentes():
     if total_alertas == 0:
         enviar_telegram("✅ *Radar IDIV:* Nenhuma nova Data COM vigente mapeada para os ativos monitorados no momento.")
 
+# ==============================================================================
+# CONTROLE DE ALERTAS (Evita enviar a mesma notícia de recompra duas vezes)
+# ==============================================================================
+ARQUIVO_CACHE = "recompras_enviadas.txt"
+
+def alerta_ja_enviado(link):
+    if not os.path.exists(ARQUIVO_CACHE):
+        return False
+    with open(ARQUIVO_CACHE, "r", encoding="utf-8") as f:
+        enviados = f.read().splitlines()
+    return link in enviados
+
+def registrar_alerta(link):
+    with open(ARQUIVO_CACHE, "a", encoding="utf-8") as f:
+        f.write(f"{link}\n")
+
+# ==============================================================================
+# NOVA FUNÇÃO: RADAR DE RECOMPRAS
+# ==============================================================================
+def executar_radar_recompras():
+    print("Iniciando varredura de programas de recompra...")
+    
+    # Gatilhos de assimetria que o bot vai procurar
+    palavras_chave = ['recompra', 'aquisição de ações', 'cancelamento de ações', 'buyback']
+    total_alertas = 0
+
+    for papel in MEUS_PAPEIS:
+        ticker_base = papel["ticker"]
+        ticker_yf = f"{ticker_base}.SA"
+        
+        try:
+            acao = yf.Ticker(ticker_yf)
+            noticias = acao.news # Usa o feed do próprio yfinance que você já tem instalado
+            
+            for noticia in noticias:
+                titulo = noticia.get('title', '')
+                link = noticia.get('link', '')
+                titulo_lower = titulo.lower()
+                
+                # Se bater com a palavra-chave e não tiver sido enviado ainda...
+                if any(palavra in titulo_lower for palavra in palavras_chave):
+                    if not alerta_ja_enviado(link):
+                        msg = (
+                            f"🚨 *RADAR DE RECOMPRA ATIVADO:* #{ticker_base}\n\n"
+                            f"• *Fato Relevante:* {titulo}\n"
+                            f"• *Impacto:* Redução da base acionária em circulação.\n"
+                            f"• *Estratégia:* Menos sócios na base = Aumento do LPA e potencial de maiores dividendos por cota!\n\n"
+                            f"🔗 [Ler comunicado completo]({link})"
+                        )
+                        enviar_telegram(msg, ticker_base)
+                        registrar_alerta(link)
+                        total_alertas += 1
+                        
+        except Exception as e:
+            print(f"Erro ao processar notícias de {ticker_base}: {e}")
+
+    print(f"Varredura de recompras concluída. {total_alertas} novos alertas enviados.")
+
+# ==============================================================================
+# EXECUÇÃO PRINCIPAL (ATUALIZADA)
+# ==============================================================================
 if __name__ == "__main__":
+    print("Iniciando rotina do Bot de Investimentos...")
+    
+    # 1. Roda o seu motor atual de Dividendos
+    executar_radar_vigentes()
+    
+    # 2. Roda o novo motor de Recompras e Assimetria
+    executar_radar_recompras()
+    
+    print("Rotina finalizada com sucesso.")
     executar_radar_vigentes()
