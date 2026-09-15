@@ -1,12 +1,12 @@
 """
 🤖 RADAR IDIV - Bot de Dividendos
 Fonte: Yahoo Finance (yfinance)
-Versão: Com distinção Data COM vs Pagamento
+Versão: Data COM + Pagamento (timezone corrigido)
 """
 
 import yfinance as yf
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Logging
@@ -70,9 +70,6 @@ def enviar_telegram(mensagem):
 def buscar_dividendos_detalhados(ticker):
     """
     Busca dividendos com Data COM e Data de Pagamento
-    Yahoo Finance retorna:
-    - dividends.index = Data de Pagamento
-    - Precisamos estimar Data COM (geralmente 1-30 dias antes do pagamento)
     """
     logger.info(f"🔍 Buscando dividendos: {ticker}")
     
@@ -88,10 +85,11 @@ def buscar_dividendos_detalhados(ticker):
         
         lista = []
         for data_pagamento, valor in dividendos.items():
-            # Yahoo Finance retorna Data de Pagamento
-            # Data COM geralmente é 15-30 dias antes (varia por empresa)
-            # Para simplificar, assumimos Data COM = 15 dias antes do pagamento
+            # Remove timezone da data do Yahoo Finance
+            if hasattr(data_pagamento, 'tzinfo') and data_pagamento.tzinfo is not None:
+                data_pagamento = data_pagamento.replace(tzinfo=None)
             
+            # Data COM estimada (15 dias antes do pagamento)
             data_com_estimada = data_pagamento - timedelta(days=15)
             
             lista.append({
@@ -122,7 +120,8 @@ def main():
     total_alertas = 0
     total_encontrados = 0
     
-    hoje = datetime.now()
+    # datetime.now() sem timezone (para bater com dados do yfinance)
+    hoje = datetime.now().replace(tzinfo=None)
     
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
