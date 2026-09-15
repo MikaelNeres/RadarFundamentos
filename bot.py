@@ -1,11 +1,12 @@
 """
 🤖 RADAR IDIV - Bot de Dividendos
 Fonte: Yahoo Finance (yfinance)
+Versão: Com distinção Data COM vs Pagamento
 """
 
 import yfinance as yf
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 # Logging
@@ -34,6 +35,10 @@ MEUS_PAPEIS = [
     {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
     {"ticker": "SAUD3", "nome": "BRADSAUDE"},
     {"ticker": "DEXP3", "nome": "DEXCO"},
+    {"ticker": "PETR4", "nome": "PETROBRAS"},
+    {"ticker": "VALE3", "nome": "VALE"},
+    {"ticker": "BBSE3", "nome": "BB SEGURIDADE"},
+    {"ticker": "ITUB4", "nome": "ITAU"},
 ]
 
 # ==============================================================================
@@ -60,11 +65,16 @@ def enviar_telegram(mensagem):
     return False
 
 # ==============================================================================
-# BUSCAR DIVIDENDOS
+# BUSCAR DIVIDENDOS COM DATAS DETALHADAS
 # ==============================================================================
-def buscar_dividendos(ticker):
-    """Busca dividendos via Yahoo Finance"""
-    logger.info(f"🔍 Buscando: {ticker}")
+def buscar_dividendos_detalhados(ticker):
+    """
+    Busca dividendos com Data COM e Data de Pagamento
+    Yahoo Finance retorna:
+    - dividends.index = Data de Pagamento
+    - Precisamos estimar Data COM (geralmente 1-30 dias antes do pagamento)
+    """
+    logger.info(f"🔍 Buscando dividendos: {ticker}")
     
     try:
         acao = yf.Ticker(f"{ticker}.SA")
@@ -77,10 +87,19 @@ def buscar_dividendos(ticker):
         logger.info(f"✅ {len(dividendos)} dividendos: {ticker}")
         
         lista = []
-        for data, valor in dividendos.items():
+        for data_pagamento, valor in dividendos.items():
+            # Yahoo Finance retorna Data de Pagamento
+            # Data COM geralmente é 15-30 dias antes (varia por empresa)
+            # Para simplificar, assumimos Data COM = 15 dias antes do pagamento
+            
+            data_com_estimada = data_pagamento - timedelta(days=15)
+            
             lista.append({
-                "data": data.strftime("%d/%m/%Y"),
-                "valor": float(valor)
+                "data_pagamento": data_pagamento.strftime("%d/%m/%Y"),
+                "data_com": data_com_estimada.strftime("%d/%m/%Y"),
+                "valor": float(valor),
+                "data_com_obj": data_com_estimada,
+                "data_pagamento_obj": data_pagamento
             })
         
         return lista[-10:]
@@ -103,43 +122,57 @@ def main():
     total_alertas = 0
     total_encontrados = 0
     
+    hoje = datetime.now()
+    
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
         nome = papel["nome"]
         
-        dividendos = buscar_dividendos(ticker)
+        dividendos = buscar_dividendos_detalhados(ticker)
         total_encontrados += len(dividendos)
         
-        hoje = datetime.now()
         for div in dividendos:
-            try:
-                data_div = datetime.strptime(div["data"], "%d/%m/%Y")
-                dias_atras = (hoje - data_div).days
+            # Usa Data COM para filtro
+            dias_atras_com = (hoje - div["data_com_obj"]).days
+            
+            # Filtra dividendos com Data COM nos últimos 60 dias
+            if 0 <= dias_atras_com <= 60:
+                # Calcula dias até pagamento (ou se já passou)
+                dias_para_pagamento = (div["data_pagamento_obj"] - hoje).days
                 
-                if 0 <= dias_atras <= 60:
-                    msg = (
-                        f"#{ticker} | {mes_ano} | {nome}\n\n"
-                        f"💰 *DIVIDENDO*\n"
-                        f"💵 *Valor:* R$ {div['valor']:.4f}\n"
-                        f"📅 *Data:* {div['data']}\n"
-                        f"📊 *Dias atrás:* {dias_atras}"
-                    )
-                    
-                    enviar_telegram(msg)
-                    total_alertas += 1
-                    logger.info(f"✅ Alerta: {ticker}")
-                    
-            except Exception as e:
-                logger.debug(f"⚠️ Erro: {e}")
+                # Define status do pagamento
+                if dias_para_pagamento < 0:
+                    status_pagamento = "✅ Já pago"
+                elif dias_para_pagamento == 0:
+                    status_pagamento = "💰 Pagamento HOJE"
+                elif dias_para_pagamento <= 7:
+                    status_pagamento = f"⏳ Em {dias_para_pagamento} dias"
+                else:
+                    status_pagamento = f"📅 Em {dias_para_pagamento} dias ({div['data_pagamento']})"
+                
+                # Monta mensagem
+                msg = (
+                    f"#{ticker} | {mes_ano} | {nome}\n\n"
+                    f"💰 *DIVIDENDO*\n"
+                    f"💵 *Valor:* R$ {div['valor']:.4f}\n"
+                    f"📅 *Data COM:* {div['data_com']}\n"
+                    f"💳 *Pagamento:* {status_pagamento}\n"
+                    f"📊 *Dias desde COM:* {dias_atras_com}"
+                )
+                
+                enviar_telegram(msg)
+                total_alertas += 1
+                logger.info(f"✅ Alerta: {ticker} | COM: {div['data_com']} | Pag: {div['data_pagamento']}")
     
     logger.info(f"✅ Fim: {total_alertas} alertas / {total_encontrados} encontrados")
     
+    # Mensagem final
     if total_alertas == 0:
         enviar_telegram(
             f"ℹ️ *Status:*\n\n"
             f"📊 Ativos: {len(MEUS_PAPEIS)}\n"
             f"🔍 Encontrados: {total_encontrados}\n"
-            f"⚠️ Nenhum dividendo nos últimos 60 dias"
+            f"⚠️ Nenhum dividendo com Data COM nos últimos 60 dias"
         )
     else:
         enviar_telegram(
