@@ -1,13 +1,14 @@
 """
-🤖 RADAR IDIV - Bot de Dividendos
+🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 Fonte: Yahoo Finance (yfinance)
-Versão: Filtra apenas dividendos relevantes (COM futura ou não paga)
+Versão: Dividendos + Fundamentos + Notícias + Sinais
 """
 
 import yfinance as yf
 import requests
 from datetime import datetime, timedelta
 import logging
+import pandas as pd
 
 # Logging
 logging.basicConfig(
@@ -41,20 +42,30 @@ MEUS_PAPEIS = [
     {"ticker": "ITUB4", "nome": "ITAU"},
 ]
 
+# Thresholds para alertas
+THRESHOLDS = {
+    "dividend_yield_min": 0.06,      # Alerta se DY > 6%
+    "payout_max": 0.80,              # Alerta se payout > 80%
+    "price_target_upside": 0.20,     # Alerta se upside > 20%
+    "revenue_decline": -0.10,        # Alerta se receita cair > 10%
+    "dividend_cut": -0.20,           # Alerta se dividendo cair > 20%
+}
+
 # ==============================================================================
 # TELEGRAM
 # ==============================================================================
-def enviar_telegram(mensagem):
+def enviar_telegram(mensagem, disable_web_preview=False):
     """Envia mensagem para Telegram"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": mensagem,
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": disable_web_preview
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=15)
         if response.status_code == 200:
             logger.info("✅ Telegram enviado")
             return True
@@ -65,133 +76,307 @@ def enviar_telegram(mensagem):
     return False
 
 # ==============================================================================
-# BUSCAR DIVIDENDOS COM DATAS DETALHADAS
+# BUSCAR DADOS COMPLETOS DA AÇÃO
 # ==============================================================================
-def buscar_dividendos_detalhados(ticker):
+def analisar_acao(ticker):
     """
-    Busca dividendos com Data COM e Data de Pagamento
+    Analisa ação completa: dividendos, fundamentos, notícias, etc.
+    Retorna dicionário com todos os dados relevantes
     """
-    logger.info(f"🔍 Buscando dividendos: {ticker}")
+    logger.info(f"🔍 Analisando: {ticker}")
     
     try:
         acao = yf.Ticker(f"{ticker}.SA")
-        dividendos = acao.dividends
+        info = acao.info
         
-        if dividendos.empty:
-            logger.warning(f"⚠️ Sem dividendos: {ticker}")
-            return []
-        
-        logger.info(f"✅ {len(dividendos)} dividendos: {ticker}")
-        
-        lista = []
-        for data_pagamento, valor in dividendos.items():
-            # Remove timezone da data do Yahoo Finance
-            if hasattr(data_pagamento, 'tzinfo') and data_pagamento.tzinfo is not None:
-                data_pagamento = data_pagamento.replace(tzinfo=None)
+        # Dados básicos
+        dados = {
+            "ticker": ticker,
+            "nome": info.get('longName', ticker),
+            "setor": info.get('sector', 'N/A'),
+            "preco_atual": info.get('currentPrice', info.get('regularMarketPrice', 0)),
             
-            # Data COM estimada (15 dias antes do pagamento)
-            data_com_estimada = data_pagamento - timedelta(days=15)
+            # Dividendos
+            "dividend_rate": info.get('dividendRate', 0),
+            "dividend_yield": info.get('dividendYield', 0),
+            "ex_dividend_date": info.get('exDividendDate'),
+            "payout_ratio": info.get('payoutRatio', 0),
+            "five_year_avg_dy": info.get('fiveYearAvgDividendYield', 0),
             
-            lista.append({
-                "data_pagamento": data_pagamento.strftime("%d/%m/%Y"),
-                "data_com": data_com_estimada.strftime("%d/%m/%Y"),
-                "valor": float(valor),
-                "data_com_obj": data_com_estimada,
-                "data_pagamento_obj": data_pagamento
-            })
+            # Valuation
+            "pe_ratio": info.get('trailingPE', 0),
+            "pb_ratio": info.get('priceToBook', 0),
+            "ev_ebitda": info.get('enterpriseToEbitda', 0),
+            
+            # Preços-alvo
+            "price_target_mean": info.get('targetMeanPrice', 0),
+            "price_target_high": info.get('targetHighPrice', 0),
+            "price_target_low": info.get('targetLowPrice', 0),
+            "recommendation": info.get('recommendationKey', 'N/A'),
+            
+            # Histórico
+            "dividendos": acao.dividends,
+            "actions": acao.actions,
+            "splits": acao.splits,
+            
+            # Fundamentos
+            "financials": acao.financials,
+            "cashflow": acao.cashflow,
+            "quarterly_cashflow": acao.quarterly_cashflow,
+            "balance_sheet": acao.balance_sheet,
+            
+            # Notícias
+            "noticias": acao.news[:5],  # Últimas 5
+            
+            # Sinais de alerta
+            "alertas": []
+        }
         
-        return lista[-10:]
+        # Calcular upside/downside
+        if dados["preco_atual"] > 0 and dados["price_target_mean"] > 0:
+            dados["upside"] = (dados["price_target_mean"] - dados["preco_atual"]) / dados["preco_atual"]
+        else:
+            dados["upside"] = 0
+        
+        # Verificar se dividendo foi cortado
+        if len(dados["dividendos"]) >= 2:
+            ultimo = dados["dividendos"].iloc[-1]
+            anterior = dados["dividendos"].iloc[-2]
+            if anterior > 0:
+                variacao = (ultimo - anterior) / anterior
+                if variacao < THRESHOLDS["dividend_cut"]:
+                    dados["alertas"].append(f"⚠️ Dividendo caiu {variacao:.1%}")
+        
+        logger.info(f"✅ Análise completa: {ticker}")
+        return dados
         
     except Exception as e:
-        logger.error(f"❌ Erro {ticker}: {e}")
-        return []
+        logger.error(f"❌ Erro ao analisar {ticker}: {e}")
+        return None
+
+# ==============================================================================
+# GERAR ALERTAS FUNDAMENTISTAS
+# ==============================================================================
+def gerar_alertas(dados):
+    """
+    Gera alertas baseados em thresholds
+    """
+    alertas = []
+    ticker = dados["ticker"]
+    
+    # 1. Dividend Yield alto
+    if dados["dividend_yield"] and dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
+        alertas.append({
+            "tipo": "DY_ALTO",
+            "titulo": "🟢 Dividend Yield Atraente",
+            "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
+        })
+    
+    # 2. Payout muito alto
+    if dados["payout_ratio"] and dados["payout_ratio"] > THRESHOLDS["payout_max"]:
+        alertas.append({
+            "tipo": "PAYOUT_ALTO",
+            "titulo": "🟡 Payout Elevado",
+            "mensagem": f"Payout: {dados['payout_ratio']:.1%} (máximo: {THRESHOLDS['payout_max']:.0%})\n⚠️ Risco de corte de dividendos"
+        })
+    
+    # 3. Upside significativo
+    if dados["upside"] and dados["upside"] > THRESHOLDS["price_target_upside"]:
+        alertas.append({
+            "tipo": "UPSIDE",
+            "titulo": "🟢 Upside Potencial",
+            "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
+        })
+    
+    # 4. Dividendo cortado
+    for alerta in dados.get("alertas", []):
+        if "Dividendo caiu" in alerta:
+            alertas.append({
+                "tipo": "CORTE_DIVIDENDO",
+                "titulo": "🔴 Corte de Dividendo",
+                "mensagem": alerta
+            })
+    
+    return alertas
+
+# ==============================================================================
+# FORMATAR MENSAGENS
+# ==============================================================================
+def formatar_resumo_diario(dados_lista):
+    """
+    Formata resumo diário de todos os ativos
+    """
+    msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n\n"
+    
+    for dados in dados_lista:
+        if not dados:
+            continue
+        
+        ticker = dados["ticker"]
+        nome = dados["nome"].split()[0]  # Só primeiro nome
+        
+        dy = dados["dividend_yield"] or 0
+        payout = dados["payout_ratio"] or 0
+        pe = dados["pe_ratio"] or 0
+        upside = dados["upside"] or 0
+        
+        # Ícones baseados em fundamentos
+        icone_dy = "🟢" if dy > 0.08 else "🟡" if dy > 0.06 else "🔴"
+        icone_payout = "🟢" if payout < 0.60 else "🟡" if payout < 0.80 else "🔴"
+        
+        msg += f"#{ticker} | {nome}\n"
+        msg += f"{icone_dy} DY: {dy:.2%} | "
+        msg += f"{icone_payout} Payout: {payout:.1%}\n"
+        msg += f"P/L: {pe:.2f} | Upside: {upside:.1%}\n\n"
+    
+    return msg
+
+def formatar_alerta_dividendo(dados):
+    """
+    Formata alerta de dividendo (Data COM próxima)
+    """
+    ticker = dados["ticker"]
+    nome = dados["nome"].split()[0]
+    
+    ex_div = dados["ex_dividend_date"]
+    if not ex_div:
+        return None
+    
+    data_com = datetime.fromtimestamp(ex_div)
+    hoje = datetime.now()
+    dias_para_com = (data_com - hoje).days
+    
+    # Só alerta se Data COM for nos próximos 15 dias
+    if dias_para_com < 0 or dias_para_com > 15:
+        return None
+    
+    valor_div = dados["dividend_rate"] or 0
+    dy = dados["dividend_yield"] or 0
+    
+    if dias_para_com == 0:
+        status = "💰 Data COM HOJE"
+    elif dias_para_com <= 7:
+        status = f"⏳ Em {dias_para_com} dias"
+    else:
+        status = f"📅 Em {dias_para_com} dias"
+    
+    msg = (
+        f"#{ticker} | {nome}\n\n"
+        f"💰 *DIVIDENDO - DATA COM PRÓXIMA*\n"
+        f"{status}\n"
+        f"📅 *Data COM:* {data_com.strftime('%d/%m/%Y')}\n"
+        f"💵 *Dividendo:* R$ {valor_div:.4f}\n"
+        f"📊 *DY:* {dy:.2%}"
+    )
+    
+    return msg
+
+def formatar_alerta_fundamento(alerta, dados):
+    """
+    Formata alerta de fundamento (DY alto, payout alto, etc)
+    """
+    ticker = dados["ticker"]
+    nome = dados["nome"].split()[0]
+    
+    msg = (
+        f"#{ticker} | {nome}\n\n"
+        f"{alerta['titulo']}\n\n"
+        f"{alerta['mensagem']}"
+    )
+    
+    return msg
+
+def formatar_noticias(dados):
+    """
+    Formata últimas notícias
+    """
+    ticker = dados["ticker"]
+    nome = dados["nome"].split()[0]
+    noticias = dados.get("noticias", [])
+    
+    if not noticias:
+        return None
+    
+    msg = f"📰 *NOTÍCIAS - #{ticker} | {nome}*\n\n"
+    
+    for i, noticia in enumerate(noticias[:3], 1):
+        titulo = noticia.get('title', 'Sem título')
+        publisher = noticia.get('publisher', 'Desconhecido')
+        link = noticia.get('link', '#')
+        
+        # Trunca título se muito longo
+        if len(titulo) > 80:
+            titulo = titulo[:77] + "..."
+        
+        msg += f"{i}. *{titulo}*\n"
+        msg += f"   📌 {publisher}\n"
+        msg += f"   🔗 [Ler mais]({link})\n\n"
+    
+    return msg
 
 # ==============================================================================
 # RADAR PRINCIPAL
 # ==============================================================================
 def main():
     logger.info("="*60)
-    logger.info("🤖 RADAR IDIV - Iniciando")
+    logger.info("🤖 RADAR IDIV - Monitoramento Fundamentalista")
     logger.info("="*60)
     
-    mes_ano = datetime.now().strftime("%b/%y").upper()
-    enviar_telegram(f"🤖 *Radar IDIV | {mes_ano}*\nVarredura de {len(MEUS_PAPEIS)} ativos...")
+    hoje = datetime.now().strftime("%d/%m/%Y")
+    enviar_telegram(f"🤖 *Radar IDIV | {hoje}*\nIniciando monitoramento de {len(MEUS_PAPEIS)} ativos...")
     
+    todos_dados = []
     total_alertas = 0
-    total_encontrados = 0
-    total_filtrados = 0  # Quantos foram filtrados (já pagos)
-    
-    # datetime.now() sem timezone (para bater com dados do yfinance)
-    hoje = datetime.now().replace(tzinfo=None)
+    total_alertas_fundamentos = 0
     
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
-        nome = papel["nome"]
         
-        dividendos = buscar_dividendos_detalhados(ticker)
-        total_encontrados += len(dividendos)
+        # Analisa ação completa
+        dados = analisar_acao(ticker)
+        if not dados:
+            continue
         
-        for div in dividendos:
-            dias_atras_com = (hoje - div["data_com_obj"]).days
-            dias_para_pagamento = (div["data_pagamento_obj"] - hoje).days
-            
-            # REGRA DE FILTRO:
-            # ✅ Alerta se: Data COM é hoje ou no futuro
-            # ✅ Alerta se: Data COM passou mas ainda não pagou
-            # ❌ Não alerta se: Data COM passou E já pagou
-            
-            ja_passou_com = dias_atras_com > 0
-            ja_foi_pago = dias_para_pagamento < 0
-            
-            # Se já passou COM e já pagou → ignora
-            if ja_passou_com and ja_foi_pago:
-                logger.debug(f"⏭️ Ignorado: {ticker} | COM: {div['data_com']} (passou) | Pag: {div['data_pagamento']} (pago)")
-                total_filtrados += 1
-                continue
-            
-            # Determina status do pagamento
-            if dias_para_pagamento < 0:
-                status_pagamento = "✅ Já pago"
-            elif dias_para_pagamento == 0:
-                status_pagamento = "💰 Pagamento HOJE"
-            elif dias_para_pagamento <= 7:
-                status_pagamento = f"⏳ Em {dias_para_pagamento} dias"
-            else:
-                status_pagamento = f"📅 Em {dias_para_pagamento} dias ({div['data_pagamento']})"
-            
-            # Monta mensagem
-            msg = (
-                f"#{ticker} | {mes_ano} | {nome}\n\n"
-                f"💰 *DIVIDENDO*\n"
-                f"💵 *Valor:* R$ {div['valor']:.4f}\n"
-                f"📅 *Data COM:* {div['data_com']}\n"
-                f"💳 *Pagamento:* {status_pagamento}\n"
-                f"📊 *Dias até COM:* {-dias_atras_com}" if dias_atras_com < 0 else f"📊 *Dias desde COM:* {dias_atras_com}"
-            )
-            
+        todos_dados.append(dados)
+        
+        # 1. Alerta de Data COM próxima
+        msg_com = formatar_alerta_dividendo(dados)
+        if msg_com:
+            enviar_telegram(msg_com)
+            total_alertas += 1
+            logger.info(f"✅ Alerta Data COM: {ticker}")
+        
+        # 2. Alertas de fundamentos
+        alertas = gerar_alertas(dados)
+        for alerta in alertas:
+            msg = formatar_alerta_fundamento(alerta, dados)
             enviar_telegram(msg)
             total_alertas += 1
-            logger.info(f"✅ Alerta: {ticker} | COM: {div['data_com']} | Pag: {div['data_pagamento']}")
+            total_alertas_fundamentos += 1
+            logger.info(f"✅ Alerta fundamento: {ticker} | {alerta['tipo']}")
+        
+        # 3. Notícias (apenas se tiver alerta de fundamento)
+        if alertas:
+            msg_noticias = formatar_noticias(dados)
+            if msg_noticias:
+                enviar_telegram(msg_noticias, disable_web_preview=True)
     
-    logger.info(f"✅ Fim: {total_alertas} alertas / {total_encontrados} encontrados / {total_filtrados} filtrados")
+    # 4. Resumo diário
+    if todos_dados:
+        msg_resumo = formatar_resumo_diario(todos_dados)
+        enviar_telegram(msg_resumo)
     
-    # Mensagem final
-    if total_alertas == 0:
-        enviar_telegram(
-            f"ℹ️ *Status:*\n\n"
-            f"📊 Ativos: {len(MEUS_PAPEIS)}\n"
-            f"🔍 Dividendos: {total_encontrados}\n"
-            f"⏭️ Filtrados (já pagos): {total_filtrados}\n"
-            f"✅ Sem novos dividendos para acompanhar"
-        )
-    else:
-        enviar_telegram(
-            f"✅ *Concluído!*\n\n"
-            f"📊 Ativos: {len(MEUS_PAPEIS)}\n"
-            f"🔍 Dividendos: {total_encontrados}\n"
-            f"⏭️ Filtrados: {total_filtrados}\n"
-            f"📣 Alertas: {total_alertas}"
-        )
+    # 5. Mensagem final
+    msg_final = (
+        f"✅ *Monitoramento Concluído!*\n\n"
+        f"📊 Ativos analisados: {len(todos_dados)}\n"
+        f"🔔 Alertas de dividendos: {total_alertas - total_alertas_fundamentos}\n"
+        f"📈 Alertas de fundamentos: {total_alertas_fundamentos}\n"
+        f"📣 Total alertas: {total_alertas}"
+    )
+    enviar_telegram(msg_final)
+    
+    logger.info(f"✅ Fim: {total_alertas} alertas")
 
 # ==============================================================================
 # MAIN
