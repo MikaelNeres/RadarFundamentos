@@ -33,18 +33,18 @@ class Config:
     URLS_RI = {
         "CMIG4": {
             "nome": "CEMIG",
-            "proventos": "https://ri.cemig.com.br/dividendos/",
-            "fatos": "https://ri.cemig.com.br/fatos-relevantes/",
+            "proventos": "https://ri.cemig.com.br/informacoes-financeiras/dividendos",
+            "fatos": "https://ri.cemig.com.br/divulgacao-e-resultados/avisos-comunicados-e-fatos-relevantes",
         },
         "BBAS3": {
             "nome": "BANCO DO BRASIL",
-            "proventos": "https://ri.bb.com.br/informacoes-do-acionista/proventos/",
-            "fatos": "https://ri.bb.com.br/informacoes-ao-mercado/fatos-relevantes/",
+            "proventos": "https://ri.bb.com.br/publicacoes-e-comunicados/fatos-relevantes-comunicados-e-avisos/",
+            "fatos": "https://ri.bb.com.br/publicacoes-e-comunicados/fatos-relevantes-comunicados-e-avisos/",
         },
         "SAPR11": {
             "nome": "SANEPAR",
-            "proventos": "https://www.sanepar.com.br/ri/proventos/",
-            "fatos": "https://www.sanepar.com.br/ri/fatos-relevantes/",
+            "proventos": "https://ri.sanepar.com.br/informacoes-financeiras/dividendos-e-jcp",
+            "fatos": "https://ri.sanepar.com.br/arquivamentos-cvm/comunicados-e-fatos-relevantes",
         },
     }
 
