@@ -1,5 +1,4 @@
-# .github/workflows/rodar_bot.yml
-name: Radar IDIV - Bot Fundamentus
+name: Radar IDIV - Dividendos
 
 on:
   schedule:
@@ -11,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout do código
+      - name: Checkout
         uses: actions/checkout@v4
       
       - name: Setup Python
@@ -22,10 +21,7 @@ jobs:
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip
-          pip install aiohttp
+          pip install -r requirements.txt
       
       - name: Rodar bot
-        run: python radar_idiv.py
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
