@@ -1,7 +1,7 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 Fonte: Yahoo Finance + Google News RSS
-Versão: Tabelas WhatsApp (copy-paste friendly)
+Versão: Tabelas Telegram (código monoespaçado)
 """
 
 import yfinance as yf
@@ -79,7 +79,7 @@ def buscar_noticias_google(ticker, nome_empresa):
     """Busca notícias no Google News RSS"""
     logger.info(f"🔍 Buscando notícias Google: {ticker}")
     
-    query = f"{ticker} OR {nome_empresa.split()[0]} OR {nome_empresa} ação OR {nome_empresa} dividendos"
+    query = f"{ticker} OR {nome_empresa.split()} OR {nome_empresa} ação OR {nome_empresa} dividendos"[0]
     url = f"https://news.google.com/rss/search?q={query}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
     
     try:
@@ -268,10 +268,10 @@ def gerar_alertas(dados):
     return alertas
 
 # ==============================================================================
-# TABELAS WHATSAPP
+# TABELAS TELEGRAM (COM BACKTICKS)
 # ==============================================================================
-def formatar_tabela_resumo_whatsapp(dados_lista):
-    """Formata tabela simples para WhatsApp (copy-paste friendly)"""
+def formatar_tabela_telegram(dados_lista):
+    """Formata tabela para Telegram com código monoespaçado"""
     if not dados_lista:
         return None
     
@@ -279,6 +279,7 @@ def formatar_tabela_resumo_whatsapp(dados_lista):
     
     msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n"
     msg += f"{hoje}\n\n"
+    msg += "```\n"  # Abre código monoespaçado
     
     msg += "Ativo   | DY (12m) | Payout  | P/L   | Ups.  | Status\n"
     msg += "--------|----------|---------|-------|-------|--------\n"
@@ -302,13 +303,14 @@ def formatar_tabela_resumo_whatsapp(dados_lista):
         
         msg += f"{ticker:<7} | {dy:>6.2%} {icone_dy} | {payout:>6.1%} {icone_payout} | {pe:>6.2f} | {upside:>5.1%} | {status}\n"
     
-    msg += "\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
+    msg += "```\n\n"  # Fecha código monoespaçado
+    msg += "🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
     msg += "🟢 Payout < 60%  |  🟡 60-80%  |  🔴 > 80%\n"
     
     return msg
 
-def formatar_alertas_whatsapp(alertas_lista):
-    """Formata alertas em texto simples para WhatsApp"""
+def formatar_alertas_telegram(alertas_lista):
+    """Formata alertas em tabelas para Telegram"""
     if not alertas_lista:
         return None
     
@@ -321,6 +323,7 @@ def formatar_alertas_whatsapp(alertas_lista):
     
     if dy_alto:
         msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%)\n\n"
+        msg += "```\n"
         msg += "Ativo   | DY Atual | Threshold\n"
         msg += "--------|----------|----------\n"
         
@@ -330,10 +333,11 @@ def formatar_alertas_whatsapp(alertas_lista):
             dy = dy_match.group(1) if dy_match else 'N/A'
             msg += f"{ticker:<7} | {dy:<8} | > 6.00%\n"
         
-        msg += "\n"
+        msg += "```\n\n"
     
     if payout_alto:
         msg += "🟡 *PAYOUT ELEVADO* (>80%) - Risco de Corte\n\n"
+        msg += "```\n"
         msg += "Ativo   | Payout   | Threshold\n"
         msg += "--------|----------|----------\n"
         
@@ -343,10 +347,11 @@ def formatar_alertas_whatsapp(alertas_lista):
             payout = payout_match.group(1) if payout_match else 'N/A'
             msg += f"{ticker:<7} | {payout:<8} | > 80.0%\n"
         
-        msg += "\n"
+        msg += "```\n\n"
     
     if upside:
         msg += "🟢 *UPSIDE POTENCIAL* (>20%)\n\n"
+        msg += "```\n"
         msg += "Ativo   | Upside   | Alvo\n"
         msg += "--------|----------|----------\n"
         
@@ -360,10 +365,11 @@ def formatar_alertas_whatsapp(alertas_lista):
             
             msg += f"{ticker:<7} | {upside_val:<8} | R$ {alvo_val}\n"
         
-        msg += "\n"
+        msg += "```\n\n"
     
     if corte_div:
         msg += "🔴 *CORTE DE DIVIDENDO*\n\n"
+        msg += "```\n"
         msg += "Ativo   | Variação  | Alerta\n"
         msg += "--------|-----------|----------------\n"
         
@@ -373,16 +379,17 @@ def formatar_alertas_whatsapp(alertas_lista):
             variacao = variacao_match.group(1) if variacao_match else 'N/A'
             msg += f"{ticker:<7} | {variacao:<9} | ⚠️ Risco\n"
         
-        msg += "\n"
+        msg += "```\n\n"
     
     return msg
 
-def formatar_data_com_whatsapp(dados_com):
-    """Formata Data COM próxima para WhatsApp"""
+def formatar_data_com_telegram(dados_com):
+    """Formata Data COM para Telegram"""
     if not dados_com:
         return None
     
     msg = "💰 *DATA COM PRÓXIMA*\n\n"
+    msg += "```\n"
     msg += "Ativo   | Data COM   | Dias  | Valor    | DY\n"
     msg += "--------|------------|-------|----------|------\n"
     
@@ -394,6 +401,8 @@ def formatar_data_com_whatsapp(dados_com):
         dy = dados["dividend_yield"]
         
         msg += f"{ticker:<7} | {data_com:<10} | {dias:>5} | R$ {valor:>5.4f} | {dy:>6.2%}\n"
+    
+    msg += "```\n"
     
     return msg
 
@@ -452,26 +461,26 @@ def main():
         if alertas:
             noticias = buscar_noticias_google(ticker, dados["nome"])
             if noticias:
-                msg_noticias = formatar_noticias_google(ticker, dados["nome"].split()[0], noticias)
+                msg_noticias = formatar_noticias_google(ticker, dados["nome"].split(), noticias)[0]
                 if msg_noticias:
                     enviar_telegram(msg_noticias, disable_web_preview=True)
                     total_noticias += len(noticias)
     
     # 5. Tabela Data COM
     if dados_data_com:
-        msg_com = formatar_data_com_whatsapp(dados_data_com)
+        msg_com = formatar_data_com_telegram(dados_data_com)
         if msg_com:
             enviar_telegram(msg_com)
     
     # 6. Tabela Alertas
     if alertas_gerais:
-        msg_alertas = formatar_alertas_whatsapp(alertas_gerais)
+        msg_alertas = formatar_alertas_telegram(alertas_gerais)
         if msg_alertas:
             enviar_telegram(msg_alertas)
     
     # 7. Tabela Resumo
     if todos_dados:
-        msg_tabela = formatar_tabela_resumo_whatsapp(todos_dados)
+        msg_tabela = formatar_tabela_telegram(todos_dados)
         if msg_tabela:
             enviar_telegram(msg_tabela)
     
