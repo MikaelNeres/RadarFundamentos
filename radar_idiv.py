@@ -1,10 +1,3 @@
-"""
-🤖 RADAR IDIV - Bot Telegram para Monitoramento de Ativos B3
-Foco: Dividendos, Recompras e Movimentações de Insiders
-Fonte: Fundamentus.com.br
-Arquitetura: Async + Session Reuse + Cache
-"""
-
 import os
 import asyncio
 import aiohttp
@@ -25,14 +18,14 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # CONFIGURAÇÕES
 # ==============================================================================
-@dataclass
-class Config:
+
+class Config:  # ← Removido @dataclass
     TOKEN: str = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
     CHAT_ID: str = '566929604'
-    TIMEOUT: int = 15  # segundos
+    TIMEOUT: int = 15
     MAX_RETRIES: int = 3
-    CACHE_TTL: int = 300  # 5 minutos
-    RATE_LIMIT_DELAY: float = 0.5  # 500ms entre requests
+    CACHE_TTL: int = 300
+    RATE_LIMIT_DELAY: float = 0.5
     
     MEUS_PAPEIS: List[Dict[str, str]] = [
         {"ticker": "CMIG4", "nome": "CEMIG"},
