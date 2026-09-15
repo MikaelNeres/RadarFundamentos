@@ -37,6 +37,10 @@ MEUS_PAPEIS = [
     {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
     {"ticker": "SAUD3", "nome": "BRADSAUDE"},
     {"ticker": "DEXP3", "nome": "DEXCO"},
+    {"ticker": "PETR4", "nome": "PETROBRAS"},
+    {"ticker": "VALE3", "nome": "VALE"},
+    {"ticker": "BBSE3", "nome": "BB SEGURIDADE"},
+    {"ticker": "ITUB4", "nome": "ITAU"},
 ]
 
 THRESHOLDS = {
