@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # CONFIGURAÇÕES GERAIS
 # ==============================================================================
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+TOKEN = os.getenv('8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE')
+CHAT_ID = os.getenv('566929604')
 
 if not TOKEN or not CHAT_ID:
     logger.error("❌ TOKEN ou CHAT_ID não configurados!")
