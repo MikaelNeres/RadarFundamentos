@@ -8,7 +8,6 @@ Gestão de Ativos: Simplificada
 import yfinance as yf
 import requests
 import re
-import os
 from datetime import datetime, timedelta
 import logging
 import pandas as pd
@@ -25,19 +24,12 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 # CONFIGURAÇÕES GERAIS
 # ==============================================================================
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-
-if not TOKEN or not CHAT_ID:
-    logger.error("❌ TOKEN ou CHAT_ID não configurados!")
-    exit(1)
+TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
+CHAT_ID = '566929604'
 
 # ==============================================================================
 # 📋 LISTA DE ATIVOS (FÁCIL GESTÃO)
 # ==============================================================================
-# ADICIONE ou REMOVA ativos aqui!
-# Formato: "TICKER" (apenas o ticker, o resto é automático)
-
 MEUS_ATIVOS = [
     "CMIG4",
     "BBAS3",
@@ -50,38 +42,25 @@ MEUS_ATIVOS = [
     "VBBR3",
     "SAUD3",
     "DEXP3",
-    # Adicione novos tickers aqui (ex: "PETR4", "VALE3")
 ]
 
-# Configurações padrão (automáticas para todos os ativos)
-# Você pode personalizar por ticker se quiser
 CONFIG_PADRAO = {
-    "p_l_justo": 8.0,        # P/L justo padrão
-    "p_vp_justo": 1.2,       # P/VP justo padrão
-    "dy_medio": 0.06,        # Dividend Yield médio padrão (6%)
+    "p_l_justo": 8.0,
+    "p_vp_justo": 1.2,
+    "dy_medio": 0.06,
 }
 
-# Personalizações por ticker (opcional)
-# Deixe vazio {} para usar o padrão acima
 CONFIG_POR_TICKER = {
     "BBAS3": {"p_l_justo": 6.0, "p_vp_justo": 1.0, "dy_medio": 0.08},
     "ABCB4": {"p_l_justo": 5.0, "p_vp_justo": 0.9, "dy_medio": 0.09},
     "VBBR3": {"p_l_justo": 7.0, "p_vp_justo": 1.5, "dy_medio": 0.09},
-    # Adicione personalizações aqui se quiser
 }
 
-# ==============================================================================
-# FUNÇÃO PARA CARREGAR CONFIGURAÇÃO DOS ATIVOS
-# ==============================================================================
 def carregar_meus_papeis():
-    """
-    Carrega lista de ativos com configurações
-    Retorna: Lista de dicionários com ticker, nome e configs
-    """
+    """Carrega lista de ativos com configurações"""
     meus_papeis = []
     
     for ticker in MEUS_ATIVOS:
-        # Pega configuração personalizada ou usa padrão
         config = CONFIG_PADRAO.copy()
         
         if ticker in CONFIG_POR_TICKER:
@@ -89,7 +68,7 @@ def carregar_meus_papeis():
         
         meus_papeis.append({
             "ticker": ticker,
-            "nome": ticker,  # Será atualizado com nome real da API
+            "nome": ticker,
             "p_l_justo": config["p_l_justo"],
             "p_vp_justo": config["p_vp_justo"],
             "dy_medio": config["dy_medio"],
@@ -98,7 +77,6 @@ def carregar_meus_papeis():
     logger.info(f"📋 {len(meus_papeis)} ativos carregados: {', '.join(MEUS_ATIVOS)}")
     return meus_papeis
 
-# Carrega ativos no início
 MEUS_PAPEIS = carregar_meus_papeis()
 
 # ==============================================================================
@@ -113,13 +91,12 @@ THRESHOLDS = {
     "margem_seguranca_min": 0.20,
 }
 
-# Pesos dos Fatores (Factor Investing)
 PESOS_FATORES = {
-    "quality": 0.30,      # 30% - Foco em qualidade
-    "low_vol": 0.25,      # 25% - Baixa volatilidade
-    "value": 0.20,        # 20% - Valor
-    "dividend": 0.15,     # 15% - Dividendos
-    "momentum": 0.10,     # 10% - Momentum
+    "quality": 0.30,
+    "low_vol": 0.25,
+    "value": 0.20,
+    "dividend": 0.15,
+    "momentum": 0.10,
 }
 
 # ==============================================================================
@@ -150,10 +127,9 @@ def enviar_telegram(mensagem, disable_web_preview=False):
 # CÁLCULO DE SCORE (FACTORS)
 # ==============================================================================
 def calcular_score_quality(dados):
-    """Quality Factor: saúde financeira e eficiência"""
+    """Quality Factor"""
     scores = {}
     
-    # ROE
     roe = dados.get("roe", 0)
     if roe > 0.20:
         scores["roe"] = 100
@@ -166,7 +142,6 @@ def calcular_score_quality(dados):
     else:
         scores["roe"] = 20
     
-    # Payout
     payout = dados.get("payout_ratio", 0)
     if 0.30 <= payout <= 0.60:
         scores["payout"] = 100
@@ -177,7 +152,6 @@ def calcular_score_quality(dados):
     else:
         scores["payout"] = 40
     
-    # Margem Líquida
     margem_liquida = dados.get("profit_margins", 0)
     if margem_liquida > 0.20:
         scores["margem"] = 100
@@ -190,7 +164,6 @@ def calcular_score_quality(dados):
     else:
         scores["margem"] = 20
     
-    # Dívida/Equity
     divida_equity = dados.get("debt_to_equity", 0)
     if divida_equity < 0.5:
         scores["divida"] = 100
@@ -203,7 +176,6 @@ def calcular_score_quality(dados):
     else:
         scores["divida"] = 20
     
-    # Crescimento Receita
     crescimento_receita = dados.get("revenue_growth", 0)
     if crescimento_receita > 0.15:
         scores["crescimento"] = 100
@@ -216,7 +188,6 @@ def calcular_score_quality(dados):
     else:
         scores["crescimento"] = 20
     
-    # Score ponderado
     score_quality = (
         scores.get("roe", 50) * 0.30 +
         scores.get("payout", 50) * 0.20 +
@@ -230,11 +201,10 @@ def calcular_score_quality(dados):
         "detalhes": scores
     }
 
-def calcular_score_low_vol(dados, acao):
-    """Low Volatility Factor: risco e estabilidade"""
+def calcular_score_low_vol(dados, hist):
+    """Low Volatility Factor"""
     scores = {}
     
-    # Beta
     beta = dados.get("beta", 1.0)
     if beta < 0.8:
         scores["beta"] = 100
@@ -247,9 +217,7 @@ def calcular_score_low_vol(dados, acao):
     else:
         scores["beta"] = 20
     
-    # Volatilidade
     try:
-        hist = acao.history(period="1y")
         if len(hist) > 0:
             volatilidade = hist['Close'].pct_change().std() * np.sqrt(252)
             if volatilidade < 0.20:
@@ -267,9 +235,7 @@ def calcular_score_low_vol(dados, acao):
     except:
         scores["volatilidade"] = 50
     
-    # Drawdown
     try:
-        hist = acao.history(period="1y")
         if len(hist) > 0:
             maxima = hist['Close'].max()
             atual = hist['Close'].iloc[-1]
@@ -289,7 +255,6 @@ def calcular_score_low_vol(dados, acao):
     except:
         scores["drawdown"] = 50
     
-    # Score ponderado
     score_low_vol = (
         scores.get("beta", 50) * 0.40 +
         scores.get("volatilidade", 50) * 0.30 +
@@ -302,10 +267,9 @@ def calcular_score_low_vol(dados, acao):
     }
 
 def calcular_score_value(dados, papel_config):
-    """Value Factor: se ação está barata"""
+    """Value Factor"""
     scores = {}
     
-    # P/L
     p_l = dados.get("pe_ratio", 0)
     p_l_justo = papel_config.get("p_l_justo", 8.0)
     if p_l > 0 and p_l < p_l_justo * 0.5:
@@ -319,7 +283,6 @@ def calcular_score_value(dados, papel_config):
     else:
         scores["p_l"] = 20
     
-    # P/VP
     p_vp = dados.get("pb_ratio", 0)
     p_vp_justo = papel_config.get("p_vp_justo", 1.2)
     if p_vp > 0 and p_vp < p_vp_justo * 0.5:
@@ -333,7 +296,6 @@ def calcular_score_value(dados, papel_config):
     else:
         scores["p_vp"] = 20
     
-    # EV/EBITDA
     ev_ebitda = dados.get("ev_ebitda", 0)
     if ev_ebitda > 0 and ev_ebitda < 5:
         scores["ev_ebitda"] = 100
@@ -346,7 +308,6 @@ def calcular_score_value(dados, papel_config):
     else:
         scores["ev_ebitda"] = 20
     
-    # Score ponderado
     score_value = (
         scores.get("p_l", 50) * 0.40 +
         scores.get("p_vp", 50) * 0.30 +
@@ -359,10 +320,9 @@ def calcular_score_value(dados, papel_config):
     }
 
 def calcular_score_dividend(dados):
-    """Dividend Factor: atratividade de dividendos"""
+    """Dividend Factor"""
     scores = {}
     
-    # DY
     dy = dados.get("dividend_yield", 0)
     if dy > 0.10:
         scores["dy"] = 100
@@ -375,7 +335,6 @@ def calcular_score_dividend(dados):
     else:
         scores["dy"] = 20
     
-    # Payout
     payout = dados.get("payout_ratio", 0)
     if 0.30 <= payout <= 0.60:
         scores["payout"] = 100
@@ -386,7 +345,6 @@ def calcular_score_dividend(dados):
     else:
         scores["payout"] = 40
     
-    # Consistência
     dy_medio_5a = dados.get("five_year_avg_dividend_yield", 0)
     if dy_medio_5a > 0 and dy >= dy_medio_5a:
         scores["consistencia"] = 100
@@ -397,7 +355,6 @@ def calcular_score_dividend(dados):
     else:
         scores["consistencia"] = 40
     
-    # Score ponderado
     score_dividend = (
         scores.get("dy", 50) * 0.50 +
         scores.get("payout", 50) * 0.30 +
@@ -409,14 +366,12 @@ def calcular_score_dividend(dados):
         "detalhes": scores
     }
 
-def calcular_score_momentum(dados, acao):
-    """Momentum Factor: tendência de preço"""
+def calcular_score_momentum(dados, hist):
+    """Momentum Factor"""
     scores = {}
     
     try:
-        hist = acao.history(period="1y")
         if len(hist) > 0:
-            # Retorno 12m
             retorno_12m = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]
             if retorno_12m > 0.30:
                 scores["retorno_12m"] = 100
@@ -429,7 +384,6 @@ def calcular_score_momentum(dados, acao):
             else:
                 scores["retorno_12m"] = 20
             
-            # Preço vs Máxima
             maxima_52s = hist['Close'].max()
             atual = hist['Close'].iloc[-1]
             distancia_maxima = (atual - maxima_52s) / maxima_52s
@@ -450,7 +404,6 @@ def calcular_score_momentum(dados, acao):
         scores["retorno_12m"] = 50
         scores["distancia_maxima"] = 50
     
-    # Score ponderado
     score_momentum = (
         scores.get("retorno_12m", 50) * 0.60 +
         scores.get("distancia_maxima", 50) * 0.40
@@ -461,15 +414,14 @@ def calcular_score_momentum(dados, acao):
         "detalhes": scores
     }
 
-def calcular_score_composto(dados, acao, papel_config):
-    """Score composto usando Factor Investing"""
+def calcular_score_composto(dados, hist, papel_config):
+    """Score composto"""
     score_quality = calcular_score_quality(dados)
-    score_low_vol = calcular_score_low_vol(dados, acao)
+    score_low_vol = calcular_score_low_vol(dados, hist)
     score_value = calcular_score_value(dados, papel_config)
     score_dividend = calcular_score_dividend(dados)
-    score_momentum = calcular_score_momentum(dados, acao)
+    score_momentum = calcular_score_momentum(dados, hist)
     
-    # Score composto
     score_total = (
         score_quality["score"] * PESOS_FATORES["quality"] +
         score_low_vol["score"] * PESOS_FATORES["low_vol"] +
@@ -478,7 +430,6 @@ def calcular_score_composto(dados, acao, papel_config):
         score_momentum["score"] * PESOS_FATORES["momentum"]
     )
     
-    # Classificação
     if score_total >= 80:
         classificacao = "🟢 EXCELENTE"
     elif score_total >= 70:
@@ -503,11 +454,10 @@ def calcular_score_composto(dados, acao, papel_config):
     }
 
 def calcular_valor_intrinseco(dados, papel_config):
-    """Calcula valor intrínseco usando 4 metodologias"""
+    """Valor intrínseco"""
     preco_atual = dados.get("preco_atual", 0)
     lpa = dados.get("eps", 0)
     
-    # VPA
     p_vp = dados.get("pb_ratio", 0)
     if preco_atual > 0 and p_vp > 0:
         vpa = preco_atual / p_vp
@@ -518,7 +468,6 @@ def calcular_valor_intrinseco(dados, papel_config):
     
     valores_intrinsecos = {}
     
-    # Graham
     if lpa > 0 and vpa > 0:
         vi_graham = (22.5 * lpa * vpa) ** 0.5
         valores_intrinsecos["graham"] = {
@@ -527,7 +476,6 @@ def calcular_valor_intrinseco(dados, papel_config):
             "metodo": "Graham"
         }
     
-    # P/L Justo
     p_l_justo = papel_config.get("p_l_justo", 8.0)
     if lpa > 0 and p_l_justo > 0:
         vi_pl = lpa * p_l_justo
@@ -537,7 +485,6 @@ def calcular_valor_intrinseco(dados, papel_config):
             "metodo": "P/L Justo"
         }
     
-    # P/VP Justo
     p_vp_justo = papel_config.get("p_vp_justo", 1.2)
     if vpa > 0 and p_vp_justo > 0:
         vi_pvp = vpa * p_vp_justo
@@ -547,7 +494,6 @@ def calcular_valor_intrinseco(dados, papel_config):
             "metodo": "P/VP Justo"
         }
     
-    # Dividend Yield
     dy_medio = papel_config.get("dy_medio", 0.06)
     if dividendos_12m > 0 and dy_medio > 0:
         vi_dy = dividendos_12m / dy_medio
@@ -557,7 +503,6 @@ def calcular_valor_intrinseco(dados, papel_config):
             "metodo": "Dividend Yield"
         }
     
-    # VI ponderado
     pesos = {
         "graham": 0.30,
         "p_l": 0.25,
@@ -578,13 +523,11 @@ def calcular_valor_intrinseco(dados, papel_config):
     else:
         vi_final = 0
     
-    # Desconto
     if vi_final > 0 and preco_atual > 0:
         desconto_final = (vi_final - preco_atual) / vi_final
     else:
         desconto_final = 0
     
-    # Classificação
     if desconto_final >= 0.30:
         classificacao = "🟢 ALTO"
     elif desconto_final >= 0.15:
@@ -669,13 +612,6 @@ def analisar_acao(ticker):
             "profit_margins": info.get('profitMargins', 0),
             "debt_to_equity": info.get('debtToEquity', 0),
             "revenue_growth": info.get('revenueGrowth', 0),
-            "dividendos": dividendos,
-            "actions": acao.actions,
-            "splits": acao.splits,
-            "financials": acao.financials,
-            "cashflow": acao.cashflow,
-            "quarterly_cashflow": acao.quarterly_cashflow,
-            "balance_sheet": acao.balance_sheet,
             "alertas": []
         }
         
@@ -702,12 +638,11 @@ def analisar_acao(ticker):
 # ==============================================================================
 # ALERTAS
 # ==============================================================================
-def gerar_alertas(dados, acao, papel_config):
-    """Gera alertas baseados em factors"""
+def gerar_alertas(dados, hist, papel_config):
+    """Gera alertas"""
     alertas = []
     
-    # Score Composto
-    score_composto = calcular_score_composto(dados, acao, papel_config)
+    score_composto = calcular_score_composto(dados, hist, papel_config)
     dados["score_composto"] = score_composto
     
     if score_composto["score_total"] >= 70:
@@ -717,7 +652,6 @@ def gerar_alertas(dados, acao, papel_config):
             "mensagem": f"Score: {score_composto['score_total']:.0f}/100 ({score_composto['classificacao']})\nQuality: {score_composto['fatores']['quality']['score']:.0f} | Low Vol: {score_composto['fatores']['low_vol']['score']:.0f}"
         })
     
-    # DY Alto
     if dados["dividend_yield"] and dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
         alertas.append({
             "tipo": "DY_ALTO",
@@ -725,7 +659,6 @@ def gerar_alertas(dados, acao, papel_config):
             "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
         })
     
-    # Payout Elevado
     if dados["payout_ratio"] and dados["payout_ratio"] > THRESHOLDS["payout_max"]:
         alertas.append({
             "tipo": "PAYOUT_ALTO",
@@ -733,7 +666,6 @@ def gerar_alertas(dados, acao, papel_config):
             "mensagem": f"Payout: {dados['payout_ratio']:.1%} (máximo: {THRESHOLDS['payout_max']:.0%})\n⚠️ Risco de corte de dividendos"
         })
     
-    # Upside
     if dados["upside"] and dados["upside"] > THRESHOLDS["price_target_upside"]:
         alertas.append({
             "tipo": "UPSIDE",
@@ -741,7 +673,6 @@ def gerar_alertas(dados, acao, papel_config):
             "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
         })
     
-    # Corte Dividendo
     for alerta in dados.get("alertas", []):
         if "Dividendo caiu" in alerta:
             alertas.append({
@@ -750,7 +681,6 @@ def gerar_alertas(dados, acao, papel_config):
                 "mensagem": alerta
             })
     
-    # Valor Intrínseco
     vi = calcular_valor_intrinseco(dados, papel_config)
     dados["valor_intrinseco"] = vi
     
@@ -767,7 +697,7 @@ def gerar_alertas(dados, acao, papel_config):
 # TABELAS TELEGRAM
 # ==============================================================================
 def formatar_tabela_telegram(dados_lista):
-    """Formata tabela para Telegram"""
+    """Formata tabela"""
     if not dados_lista:
         return None
     
@@ -777,11 +707,9 @@ def formatar_tabela_telegram(dados_lista):
     msg += f"{hoje}\n\n"
     msg += "```\n"
     
-    # Header
     msg += f"{'Ativo':<7} | {'Preço':<8} | {'Score':<8} | {'Qlty':<6} | {'LowV':<6} | {'Status':<7}\n"
     msg += f"{'-'*7} | {'-'*8} | {'-'*8} | {'-'*6} | {'-'*6} | {'-'*7}\n"
     
-    # Linhas
     for dados in sorted(dados_lista, key=lambda x: x.get('score_composto', {}).get('score_total', 0), reverse=True):
         ticker = dados["ticker"]
         preco = dados["preco_atual"] or 0
@@ -791,10 +719,8 @@ def formatar_tabela_telegram(dados_lista):
         score_quality = score.get("fatores", {}).get("quality", {}).get("score", 0)
         score_low_vol = score.get("fatores", {}).get("low_vol", {}).get("score", 0)
         
-        # Ícones
         icone_score = "🟢" if score_total >= 70 else "🟡" if score_total >= 60 else "🔴"
         
-        # Status
         if score_total >= 75:
             status = "🟢 Buy"
         elif score_total >= 65:
@@ -823,7 +749,6 @@ def formatar_alertas_telegram(alertas_lista):
     
     msg = ""
     
-    # Score Alto
     if score_alto:
         msg += "🟢 *SCORE FACTOR INVESTING ALTO* (≥70)\n\n"
         msg += "```\n"
@@ -842,7 +767,6 @@ def formatar_alertas_telegram(alertas_lista):
         
         msg += "```\n\n"
     
-    # Valor Intrínseco
     if vi_alertas:
         msg += "🟢 *DESCONTO VS VALOR INTRÍNSECO* (≥20%)\n\n"
         msg += "```\n"
@@ -863,7 +787,6 @@ def formatar_alertas_telegram(alertas_lista):
         
         msg += "```\n\n"
     
-    # DY Alto
     if dy_alto:
         msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%)\n\n"
         msg += "```\n"
@@ -878,7 +801,6 @@ def formatar_alertas_telegram(alertas_lista):
         
         msg += "```\n\n"
     
-    # Payout Alto
     if payout_alto:
         msg += "🟡 *PAYOUT ELEVADO* (>80%) - Risco de Corte\n\n"
         msg += "```\n"
@@ -893,7 +815,6 @@ def formatar_alertas_telegram(alertas_lista):
         
         msg += "```\n\n"
     
-    # Upside
     if upside:
         msg += "🟢 *UPSIDE POTENCIAL* (>20%)\n\n"
         msg += "```\n"
@@ -938,7 +859,7 @@ def formatar_data_com_telegram(dados_com):
     return msg
 
 def formatar_factors_detalhado(dados_factors):
-    """Formata tabela detalhada de scores"""
+    """Formata tabela detalhada"""
     if not dados_factors:
         return None
     
@@ -984,15 +905,14 @@ def main():
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
         
-        # Analisa ação
         dados = analisar_acao(ticker)
         if not dados:
             continue
         
         acao = yf.Ticker(f"{ticker}.SA")
+        hist = acao.history(period="6mo")
         
-        # Gera alertas
-        alertas = gerar_alertas(dados, acao, papel)
+        alertas = gerar_alertas(dados, hist, papel)
         for alerta in alertas:
             alertas_gerais.append({
                 "ticker": ticker,
@@ -1003,7 +923,6 @@ def main():
         
         todos_dados.append(dados)
         
-        # Data COM próxima
         if dados["ex_dividend_date"]:
             data_com = datetime.fromtimestamp(dados["ex_dividend_date"])
             dias_para_com = (data_com - datetime.now()).days
@@ -1018,7 +937,6 @@ def main():
                     "dividend_yield": dados["dividend_yield"]
                 })
         
-        # Coleta dados para tabela detalhada
         score = dados.get("score_composto", {})
         if score.get("score_total", 0) > 0:
             dados_factors_detalhado.append({
@@ -1028,31 +946,26 @@ def main():
                 "fatores": score["fatores"]
             })
     
-    # Tabela Data COM
     if dados_data_com:
         msg_com = formatar_data_com_telegram(dados_data_com)
         if msg_com:
             enviar_telegram(msg_com)
     
-    # Tabela Alertas
     if alertas_gerais:
         msg_alertas = formatar_alertas_telegram(alertas_gerais)
         if msg_alertas:
             enviar_telegram(msg_alertas)
     
-    # Tabela Resumo
     if todos_dados:
         msg_tabela = formatar_tabela_telegram(todos_dados)
         if msg_tabela:
             enviar_telegram(msg_tabela)
     
-    # Tabela Factors Detalhado
     if dados_factors_detalhado:
         msg_factors = formatar_factors_detalhado(dados_factors_detalhado)
         if msg_factors:
             enviar_telegram(msg_factors)
     
-    # Mensagem final
     msg_final = (
         f"✅ *Monitoramento Concluído!*\n\n"
         f"📊 Ativos analisados: {len(todos_dados)}\n"
