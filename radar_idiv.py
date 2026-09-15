@@ -1,7 +1,7 @@
 """
 🤖 RADAR IDIV - Bot Telegram para Monitoramento de Ativos B3
-Fonte: Fundamentus.com.br
-Versão: Debug Aprimorada
+Fonte: Sites de RI (Relações com Investidores)
+Foco: CMIG4, BBAS3, SAPR11
 """
 
 import os
@@ -10,12 +10,11 @@ import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import logging
-from pathlib import Path
 import re
 
 # Configuração de logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Nível detalhado para debug
+    level=logging.INFO,
     format='%(asctime)s | %(levelname)-8s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -29,63 +28,27 @@ class Config:
     CHAT_ID: str = '566929604'
     TIMEOUT: int = 15
     MAX_RETRIES: int = 3
-    CACHE_TTL: int = 300
-    RATE_LIMIT_DELAY: float = 0.5
     
-    # Lista ampliada de ativos (IDIV + seus favoritos)
-    MEUS_PAPEIS: List[Dict[str, str]] = [
-        # Seus originais
-        {"ticker": "CMIG4", "nome": "CEMIG"},
-        {"ticker": "SAPR11", "nome": "SANEPAR"},
-        {"ticker": "ISAE4", "nome": "ISA ENERGIA BRASIL"},
-        {"ticker": "ABCB4", "nome": "BANCO ABC BRASIL"},
-        {"ticker": "LOGG3", "nome": "LOG COMMERCIAL PROPERTIES"},
-        {"ticker": "BBAS3", "nome": "BANCO DO BRASIL"},
-        {"ticker": "FIQE3", "nome": "UNIFIQUE"},
-        {"ticker": "GGBR4", "nome": "GERDAU"},
-        {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
-        {"ticker": "SAUD3", "nome": "BRADSAÚDE"},
-        {"ticker": "DEXP3", "nome": "DEXCO"},
-        
-        # Adicionados do IDIV
-        {"ticker": "CPFE3", "nome": "CPFL ENERGIA"},
-        {"ticker": "ENBR3", "nome": "ENERGIAS BR"},
-        {"ticker": "EQTL3", "nome": "EQUATORIAL"},
-        {"ticker": "TAEE11", "nome": "TAESA"},
-        {"ticker": "TRPL4", "nome": "TRAN PAULISTA"},
-        {"ticker": "SANB11", "nome": "SANTANDER BR"},
-        {"ticker": "BBSE3", "nome": "BBSEGURIDADE"},
-        {"ticker": "PSSA3", "nome": "PORTO SEGURO"},
-        {"ticker": "SBSP3", "nome": "SABESP"},
-        {"ticker": "BRAP4", "nome": "BRADESPAR"},
-        {"ticker": "CSNA3", "nome": "SID NACIONAL"},
-        {"ticker": "USIM5", "nome": "USIMINAS"},
-        {"ticker": "PETR4", "nome": "PETROBRAS PN"},
-        {"ticker": "VALE3", "nome": "VALE"},
-    ]
+    # URLs oficiais de RI das 3 empresas
+    URLS_RI = {
+        "CMIG4": {
+            "nome": "CEMIG",
+            "proventos": "https://ri.cemig.com.br/dividendos/",
+            "fatos": "https://ri.cemig.com.br/fatos-relevantes/",
+        },
+        "BBAS3": {
+            "nome": "BANCO DO BRASIL",
+            "proventos": "https://ri.bb.com.br/informacoes-do-acionista/proventos/",
+            "fatos": "https://ri.bb.com.br/informacoes-ao-mercado/fatos-relevantes/",
+        },
+        "SAPR11": {
+            "nome": "SANEPAR",
+            "proventos": "https://www.sanepar.com.br/ri/proventos/",
+            "fatos": "https://www.sanepar.com.br/ri/fatos-relevantes/",
+        },
+    }
 
 cfg = Config()
-
-# ==============================================================================
-# CACHE EM MEMÓRIA
-# ==============================================================================
-class SimpleCache:
-    def __init__(self, ttl: int = 300):
-        self._cache: Dict[str, tuple] = {}
-        self.ttl = ttl
-    
-    def get(self, key: str) -> Optional[any]:
-        if key in self._cache:
-            data, timestamp = self._cache[key]
-            if datetime.now().timestamp() - timestamp < self.ttl:
-                return data
-            del self._cache[key]
-        return None
-    
-    def set(self, key: str, data: any):
-        self._cache[key] = (data, datetime.now().timestamp())
-
-cache = SimpleCache(ttl=cfg.CACHE_TTL)
 
 # ==============================================================================
 # TELEGRAM
@@ -110,7 +73,7 @@ class TelegramBot:
         if ticker:
             payload["reply_markup"] = {
                 "inline_keyboard": [[
-                    {"text": f"📈 Fundamentus {ticker}", "url": f"https://fundamentus.com.br/proventos.php?papel={ticker.lower()}"}
+                    {"text": f"📈 RI {ticker}", "url": cfg.URLS_RI[ticker]["proventos"]}
                 ]]
             }
         
@@ -132,229 +95,186 @@ class TelegramBot:
         return False
 
 # ==============================================================================
-# SCRAPER FUNDAMENTUS - VERSÃO DEBUG
+# SCRAPER DE RI
 # ==============================================================================
-class FundamentusScraper:
+class RIScraper:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
-        self.base_url = "https://fundamentus.com.br"
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
         }
     
-    async def _fetch_page(self, url: str, salvar_html: bool = False, ticker: str = "") -> Optional[str]:
-        """Fetch HTML com retry, rate limiting e opção de salvar para debug"""
-        cache_key = f"html:{url}"
-        cached = cache.get(cache_key)
-        if cached:
-            logger.debug(f"📦 Cache hit: {url}")
-            return cached
+    async def buscar_proventos(self, ticker: str) -> List[Dict]:
+        """Busca proventos diretamente no site de RI"""
         
-        await asyncio.sleep(cfg.RATE_LIMIT_DELAY)
+        if ticker not in cfg.URLS_RI:
+            logger.warning(f"⚠️ RI não cadastrado para {ticker}")
+            return []
+        
+        url = cfg.URLS_RI[ticker]["proventos"]
+        logger.info(f"🔍 [RI] Buscando proventos: {ticker}")
         
         for tentativa in range(cfg.MAX_RETRIES):
             try:
                 async with self.session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=cfg.TIMEOUT)) as resp:
-                    if resp.status == 200:
-                        html = await resp.text(encoding='utf-8')
-                        cache.set(cache_key, html)
-                        
-                        # Salva HTML para debug (apenas no primeiro ticker)
-                        if salvar_html and ticker:
-                            arquivo_html = Path(f"debug_{ticker.lower()}.html")
-                            with open(arquivo_html, "w", encoding="utf-8") as f:
-                                f.write(html)
-                            logger.info(f"💾 HTML salvo em: {arquivo_html}")
-                        
-                        logger.debug(f"✅ Fetch OK: {url} ({len(html)} chars)")
-                        return html
-                    logger.warning(f"⚠️ Status {resp.status} para {url}")
+                    if resp.status != 200:
+                        logger.warning(f"⚠️ [RI] Status {resp.status} para {ticker}")
+                        return []
+                    
+                    html = await resp.text(encoding='utf-8')
+                    logger.info(f"✅ [RI] HTML baixado: {len(html)} chars")
+                    
+                    # Salva HTML para debug
+                    with open(f"debug_ri_{ticker.lower()}.html", "w", encoding="utf-8") as f:
+                        f.write(html)
+                    logger.info(f"💾 HTML salvo: debug_ri_{ticker.lower()}.html")
+                    
+                    proventos = self._parse_proventos(html, ticker)
+                    logger.info(f"✅ [RI] {ticker}: {len(proventos)} proventos encontrados")
+                    return proventos
+                    
             except asyncio.TimeoutError:
                 logger.warning(f"⏱️ Timeout (tentativa {tentativa + 1}/{cfg.MAX_RETRIES})")
             except Exception as e:
-                logger.error(f"❌ Erro fetch {url}: {e}")
+                logger.error(f"❌ [RI] Erro ao buscar {ticker}: {e}")
             
             if tentativa < cfg.MAX_RETRIES - 1:
                 await asyncio.sleep(2 ** tentativa)
         
-        return None
+        return []
     
-    def _parse_tabela_proventos(self, html: str, ticker: str = "") -> List[Dict]:
-        """Extrai proventos usando MÚLTIPLOS padrões de regex (fallback)"""
+    def _parse_proventos(self, html: str, ticker: str) -> List[Dict]:
+        """Parse de proventos - Múltiplos padrões de fallback"""
         proventos = []
         
-        logger.info(f"🔍 Parse proventos para {ticker} - HTML size: {len(html)} chars")
+        logger.debug(f"🔍 Parse proventos para {ticker}")
         
         # ======================================================================
-        # PADRÃO 1: Tabela clássica do Fundamentus
+        # PADRÃO 1: Tabela HTML (mais comum em RIs)
         # ======================================================================
-        logger.debug("📊 Tentando Padrão 1: Tabela clássica...")
+        tabelas = re.findall(r'<table[^>]*>(.*?)</table>', html, re.DOTALL | re.IGNORECASE)
         
-        # Busca a seção de proventos
-        padrao_secao = r'(?:Proventos|Dividendos|JCP)[^<]*(?:</h[^>]*>|</div[^>]*>)'
-        secao_match = re.search(padrao_secao, html, re.IGNORECASE | re.DOTALL)
+        for tabela in tabelas:
+            linhas = re.findall(r'<tr[^>]*>(.*?)</tr>', tabela, re.DOTALL)
+            
+            for linha in linhas:
+                celulas = re.findall(r'<td[^>]*>(.*?)</td>', linha, re.DOTALL)
+                
+                if len(celulas) >= 3:
+                    # Limpa HTML das células
+                    celulas_texto = [re.sub(r'<[^>]+>', '', c).strip() for c in celulas]
+                    
+                    # Busca data no formato DD/MM/AAAA
+                    for j, celula in enumerate(celulas_texto):
+                        data_match = re.search(r'(\d{2}/\d{2}/\d{4})', celula)
+                        
+                        if data_match:
+                            data_com = data_match.group(1)
+                            
+                            # Busca valor R$ nas células seguintes
+                            for k in range(j+1, min(j+4, len(celulas_texto))):
+                                valor_match = re.search(r'R\$\s*([\d.,]+)', celulas_texto[k])
+                                
+                                if valor_match:
+                                    try:
+                                        valor_str = valor_match.group(1)
+                                        valor_limpo = valor_str.replace('.', '').replace(',', '.')
+                                        valor = float(valor_limpo)
+                                        
+                                        if 0.01 <= valor <= 100:  # Faixa razoável
+                                            proventos.append({
+                                                "data_com": data_com,
+                                                "valor": valor,
+                                                "tipo": "Dividendo",
+                                                "fonte": "RI"
+                                            })
+                                            logger.debug(f"  💰 {data_com} | R$ {valor:.4f}")
+                                    except (ValueError, IndexError):
+                                        pass
         
-        if secao_match:
-            logger.debug("✅ Seção de proventos encontrada")
+        # ======================================================================
+        # PADRÃO 2: Busca genérica por datas + valores
+        # ======================================================================
+        if not proventos:
+            logger.debug("🔍 Tentando padrão genérico...")
             
-            # Extrai datas e valores da seção
-            padrao_data_valor = r'(\d{2}/\d{2}/\d{4})[^0-9]{0,100}?R\$\s*([\d.,]+)'
-            matches = re.findall(padrao_data_valor, html, re.IGNORECASE)
+            # Busca todas as datas
+            datas = re.findall(r'(\d{2}/\d{2}/\d{4})', html)
             
-            for data_com, valor_str in matches[:10]:
+            # Busca todos os valores R$
+            valores = re.findall(r'R\$\s*([\d.,]+)', html)
+            
+            # Tenta parear
+            for i in range(min(len(datas), len(valores))):
                 try:
+                    valor_str = valores[i]
                     valor_limpo = valor_str.replace('.', '').replace(',', '.')
                     valor = float(valor_limpo)
                     
-                    if valor > 0.001:  # Filtra valores irrisórios
+                    if 0.01 <= valor <= 100:
                         proventos.append({
-                            "data_com": data_com,
+                            "data_com": datas[i],
                             "valor": valor,
-                            "tipo": "Dividendo"
+                            "tipo": "Dividendo",
+                            "fonte": "RI"
                         })
-                        logger.debug(f"  💰 {data_com} | R$ {valor:.4f}")
-                except (ValueError, IndexError) as e:
-                    logger.debug(f"  ⚠️ Erro parse {data_com}: {e}")
+                        logger.debug(f"  💰 {datas[i]} | R$ {valor:.4f} (genérico)")
+                except (ValueError, IndexError):
+                    pass
         
-        # ======================================================================
-        # PADRÃO 2: Busca genérica por datas + valores monetários
-        # ======================================================================
-        if not proventos:
-            logger.debug("📊 Tentando Padrão 2: Busca genérica...")
-            
-            # Busca TODAS as datas no HTML
-            todas_datas = re.findall(r'(\d{2}/\d{2}/\d{4})', html)
-            logger.debug(f"  📅 Datas encontradas: {len(todas_datas)}")
-            
-            # Busca TODOS os valores R$ no HTML
-            todos_valores = re.findall(r'R\$\s*([\d.,]+)', html)
-            logger.debug(f"  💰 Valores R$ encontrados: {len(todos_valores)}")
-            
-            # Tenta parear datas e valores próximos
-            for i, data in enumerate(todas_datas[:20]):
-                if i < len(todos_valores):
-                    try:
-                        valor_str = todos_valores[i]
-                        valor_limpo = valor_str.replace('.', '').replace(',', '.')
-                        valor = float(valor_limpo)
-                        
-                        if 0.01 <= valor <= 100:  # Faixa razoável para dividendos
-                            proventos.append({
-                                "data_com": data,
-                                "valor": valor,
-                                "tipo": "Dividendo"
-                            })
-                            logger.debug(f"  💰 {data} | R$ {valor:.4f}")
-                    except (ValueError, IndexError):
-                        pass
-        
-        # ======================================================================
-        # PADRÃO 3: Extrai de tabelas HTML
-        # ======================================================================
-        if not proventos:
-            logger.debug("📊 Tentando Padrão 3: Tabelas HTML...")
-            
-            # Busca tabelas
-            tabelas = re.findall(r'<table[^>]*>(.*?)</table>', html, re.DOTALL | re.IGNORECASE)
-            logger.debug(f"  📋 Tabelas encontradas: {len(tabelas)}")
-            
-            for tabela in tabelas:
-                # Extrai linhas
-                linhas = re.findall(r'<tr[^>]*>(.*?)</tr>', tabela, re.DOTALL)
-                
-                for linha in linhas:
-                    # Extrai células
-                    celulas = re.findall(r'<td[^>]*>(.*?)</td>', linha, re.DOTALL)
-                    
-                    if len(celulas) >= 2:
-                        # Limpa HTML
-                        celulas_texto = [re.sub(r'<[^>]+>', '', c).strip() for c in celulas]
-                        
-                        # Busca data em alguma célula
-                        for j, celula in enumerate(celulas_texto):
-                            data_match = re.search(r'(\d{2}/\d{2}/\d{4})', celula)
-                            if data_match:
-                                data_com = data_match.group(1)
-                                
-                                # Busca valor R$ nas células seguintes
-                                for k in range(j+1, min(j+3, len(celulas_texto))):
-                                    valor_match = re.search(r'R\$\s*([\d.,]+)', celulas_texto[k])
-                                    if valor_match:
-                                        try:
-                                            valor_str = valor_match.group(1)
-                                            valor_limpo = valor_str.replace('.', '').replace(',', '.')
-                                            valor = float(valor_limpo)
-                                            
-                                            if 0.01 <= valor <= 100:
-                                                proventos.append({
-                                                    "data_com": data_com,
-                                                    "valor": valor,
-                                                    "tipo": "Dividendo"
-                                                })
-                                                logger.debug(f"  💰 {data_com} | R$ {valor:.4f} (tabela)")
-                                        except (ValueError, IndexError):
-                                            pass
-        
-        logger.info(f"✅ Total proventos encontrados: {len(proventos)}")
         return proventos[:10]  # Máximo 10
-    
-    async def buscar_proventos(self, ticker: str, salvar_debug: bool = False) -> List[Dict]:
-        """Busca proventos de um ticker"""
-        url = f"{self.base_url}/proventos.php?papel={ticker.upper()}&interface=classic"
-        logger.info(f"🔍 Buscando proventos: {ticker}")
-        
-        html = await self._fetch_page(url, salvar_html=salvar_debug, ticker=ticker)
-        if not html:
-            logger.warning(f"⚠️ HTML vazio para {ticker}")
-            return []
-        
-        return self._parse_tabela_proventos(html, ticker)
     
     async def buscar_fatos_relevantes(self, ticker: str) -> List[Dict]:
         """Busca fatos relevantes (recompras, insiders)"""
-        url = f"{self.base_url}/fatos_relevantes.php?papel={ticker.upper()}"
-        logger.info(f"🔍 Buscando fatos relevantes: {ticker}")
         
-        html = await self._fetch_page(url)
-        if not html:
+        if ticker not in cfg.URLS_RI:
             return []
         
-        return self._parse_fatos_relevantes(html, ticker)
+        url = cfg.URLS_RI[ticker]["fatos"]
+        logger.info(f"🔍 [RI] Buscando fatos relevantes: {ticker}")
+        
+        try:
+            async with self.session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=cfg.TIMEOUT)) as resp:
+                if resp.status != 200:
+                    return []
+                
+                html = await resp.text(encoding='utf-8')
+                return self._parse_fatos(html, ticker, url)
+                
+        except Exception as e:
+            logger.error(f"❌ [RI] Erro fatos relevantes {ticker}: {e}")
+            return []
     
-    def _parse_fatos_relevantes(self, html: str, ticker: str) -> List[Dict]:
-        """Extrai fatos relevantes do HTML"""
+    def _parse_fatos(self, html: str, ticker: str, url: str) -> List[Dict]:
+        """Parse de fatos relevantes"""
         fatos = []
-        palavras_chave_recompra = ['recompra', 'buyback', 'aquisição de ações próprias', 'cancelamento de ações']
-        palavras_chave_insider = ['negociação', 'diretor', 'conselho', 'insider', 'participação significativa']
         
-        # Busca fatos relevantes
-        padrao_fato = r'(\d{2}/\d{2}/\d{4})[^0-9]{0,50}?(FR|CO|FA)[^0-9]{0,100}?(?:Download|Comunicado)[^0-9]{0,100}?href="([^"]+)"'
+        palavras_chave = {
+            "recompra": "RECOMPRA",
+            "buyback": "RECOMPRA",
+            "ações próprias": "RECOMPRA",
+            "diretor": "INSIDER",
+            "conselho": "INSIDER",
+            "participação": "INSIDER",
+        }
         
-        matches = re.findall(padrao_fato, html, re.IGNORECASE | re.DOTALL)
+        # Busca datas + descrições
+        padrao = r'(\d{2}/\d{2}/\d{4})[^0-9]{0,200}?(recompra|buyback|diretor|conselho|participação)'
+        matches = re.findall(padrao, html, re.IGNORECASE)
         
-        for data, tipo, link in matches[:5]:
-            descricao = f"Fato Relevante {tipo}"  # Simplificado
-            descricao_lower = descricao.lower()
+        for data, palavra in matches[:5]:
+            categoria = palavras_chave.get(palavra.lower(), "OUTRO")
             
-            categoria = None
-            if any(p in descricao_lower for p in palavras_chave_recompra):
-                categoria = "RECOMPRA"
-            elif any(p in descricao_lower for p in palavras_chave_insider):
-                categoria = "INSIDER"
-            
-            if categoria:
-                fatos.append({
-                    "data": data,
-                    "tipo": tipo,
-                    "descricao": descricao,
-                    "categoria": categoria,
-                    "link": f"{self.base_url}/{link}" if link.startswith('/') else link
-                })
+            fatos.append({
+                "data": data,
+                "tipo": "FR",
+                "descricao": f"Fato relevante: {palavra}",
+                "categoria": categoria,
+                "link": url,
+                "fonte": "RI"
+            })
         
         return fatos
 
@@ -362,39 +282,30 @@ class FundamentusScraper:
 # RADAR DE DIVIDENDOS
 # ==============================================================================
 class RadarDividendos:
-    def __init__(self, scraper: FundamentusScraper, telegram: TelegramBot):
+    def __init__(self, scraper: RIScraper, telegram: TelegramBot):
         self.scraper = scraper
         self.telegram = telegram
     
-    async def executar(self, papeis: List[Dict[str, str]], salvar_debug_html: bool = False):
-        """Varre todos os papéis"""
-        logger.info("🚀 Iniciando radar de dividendos...")
+    async def executar(self, tickers: List[str]):
+        """Varre tickers de RI"""
+        logger.info("🚀 Iniciando radar de dividendos (RI)...")
         mes_ano = datetime.now().strftime("%b/%y").upper()
         
         await self.telegram.send_message(
             f"🤖 *Radar IDIV | {mes_ano}*\n"
-            f"Varredura de {len(papeis)} ativos iniciada..."
+            f"Varredura de {len(tickers)} ativos (RI) iniciada..."
         )
         
         total_alertas = 0
         total_encontrados = 0
         
-        for i, papel in enumerate(papeis):
-            ticker = papel["ticker"]
-            nome = papel["nome"]
+        for ticker in tickers:
+            nome = cfg.URLS_RI[ticker]["nome"]
             
-            # Salva HTML apenas no primeiro ticker para debug
-            salvar = salvar_debug_html and (i == 0)
-            
-            proventos = await self.scraper.buscar_proventos(ticker, salvar_debug=salvar)
+            proventos = await self.scraper.buscar_proventos(ticker)
             total_encontrados += len(proventos)
             
-            if proventos:
-                logger.info(f"✅ {ticker}: {len(proventos)} proventos encontrados")
-            else:
-                logger.warning(f"⚠️ {ticker}: Nenhum provento encontrado")
-            
-            # Filtra proventos dos últimos 60 dias (ampliado para debug)
+            # Filtra últimos 60 dias
             hoje = datetime.now()
             proventos_recentes = []
             
@@ -403,7 +314,7 @@ class RadarDividendos:
                     data_com = datetime.strptime(prov["data_com"], "%d/%m/%Y")
                     dias_atras = (hoje - data_com).days
                     
-                    if 0 <= dias_atras <= 60:  # Últimos 60 dias
+                    if 0 <= dias_atras <= 60:
                         prov["dias_atras"] = dias_atras
                         proventos_recentes.append(prov)
                 except ValueError:
@@ -413,7 +324,7 @@ class RadarDividendos:
             for prov in proventos_recentes:
                 msg = (
                     f"#{ticker} | {mes_ano} | {nome}\n\n"
-                    f"💰 *PROVENTO ENCONTRADO:*\n"
+                    f"💰 *PROVENTO ENCONTRADO [RI]*\n"
                     f"💵 *Valor:* R$ {prov['valor']:.4f} por ação\n"
                     f"📅 *Data COM:* {prov['data_com']}\n"
                     f"📊 *Dias atrás:* {prov.get('dias_atras', 'N/A')} dias\n"
@@ -429,15 +340,15 @@ class RadarDividendos:
         if total_alertas == 0:
             await self.telegram.send_message(
                 f"ℹ️ *Status da Varredura:*\n\n"
-                f"📊 Ativos varridos: {len(papeis)}\n"
+                f"📊 Ativos varridos: {len(tickers)}\n"
                 f"🔍 Proventos encontrados: {total_encontrados}\n"
                 f"⚠️ Nenhum provento com Data COM nos últimos 60 dias\n\n"
-                f"💡 *Nota:* Verifique os logs para detalhes."
+                f"💡 *Nota:* Verifique os arquivos debug_ri_*.html"
             )
         else:
             await self.telegram.send_message(
                 f"✅ *Varredura Concluída!*\n\n"
-                f"📊 Ativos varridos: {len(papeis)}\n"
+                f"📊 Ativos varridos: {len(tickers)}\n"
                 f"🔍 Total proventos: {total_encontrados}\n"
                 f"📣 Alertas enviados: {total_alertas}"
             )
@@ -446,64 +357,64 @@ class RadarDividendos:
 # RADAR DE RECOMPRAS E INSIDERS
 # ==============================================================================
 class RadarRecomprasInsiders:
-    def __init__(self, scraper: FundamentusScraper, telegram: TelegramBot):
+    def __init__(self, scraper: RIScraper, telegram: TelegramBot):
         self.scraper = scraper
         self.telegram = telegram
-        self.arquivo_cache = Path("alertas_enviados.txt")
+        self.arquivo_cache = "alertas_enviados.txt"
         self._carregar_cache()
     
     def _carregar_cache(self):
         self.alertas_enviados = set()
-        if self.arquivo_cache.exists():
+        if os.path.exists(self.arquivo_cache):
             with open(self.arquivo_cache, "r", encoding="utf-8") as f:
                 self.alertas_enviados = set(f.read().splitlines())
-            logger.info(f"📦 Cache carregado: {len(self.alertas_enviados)} alertas")
     
     def _registrar_alerta(self, link: str):
         self.alertas_enviados.add(link)
         with open(self.arquivo_cache, "a", encoding="utf-8") as f:
             f.write(f"{link}\n")
     
-    async def executar(self, papeis: List[Dict[str, str]]):
-        """Varre todos os papéis"""
+    async def executar(self, tickers: List[str]):
+        """Varre fatos relevantes"""
         logger.info("🚀 Iniciando radar de recompras e insiders...")
         
-        total_recompras = 0
-        total_insiders = 0
+        total_alertas = 0
         
-        for papel in papeis:
-            ticker = papel["ticker"]
-            
+        for ticker in tickers:
             fatos = await self.scraper.buscar_fatos_relevantes(ticker)
             
             for fato in fatos:
-                if fato["categoria"] == "RECOMPRA" and not self._ja_enviado(fato["link"]):
-                    msg = (
-                        f"🚨 *RECOMPRA DETECTADA:* #{ticker}\n\n"
-                        f"📅 *Data:* {fato['data']}\n"
-                        f"📄 *Fato:* {fato['descricao'][:200]}...\n\n"
-                        f"💡 *Impacto:* Redução da base acionária → LPA maior\n"
-                        f"🔗 [Ler comunicado]({fato['link']})"
-                    )
+                if not self._ja_enviado(fato["link"]):
+                    if fato["categoria"] == "RECOMPRA":
+                        msg = (
+                            f"🚨 *RECOMPRA DETECTADA:* #{ticker}\n\n"
+                            f"📅 *Data:* {fato['data']}\n"
+                            f"📄 *Fato:* {fato['descricao']}\n\n"
+                            f"💡 *Impacto:* Redução da base acionária → LPA maior\n"
+                            f"🔗 [Ler comunicado]({fato['link']})"
+                        )
+                        
+                        await self.telegram.send_message(msg, ticker)
+                        self._registrar_alerta(fato["link"])
+                        total_alertas += 1
                     
-                    await self.telegram.send_message(msg, ticker)
-                    self._registrar_alerta(fato["link"])
-                    total_recompras += 1
-                
-                elif fato["categoria"] == "INSIDER" and not self._ja_enviado(fato["link"]):
-                    msg = (
-                        f"👁️ *MOVIMENTAÇÃO DE INSIDER:* #{ticker}\n\n"
-                        f"📅 *Data:* {fato['data']}\n"
-                        f"📄 *Fato:* {fato['descricao'][:200]}...\n\n"
-                        f"💡 *Sinal:* Insiders conhecem a empresa melhor que ninguém\n"
-                        f"🔗 [Ler comunicado]({fato['link']})"
-                    )
-                    
-                    await self.telegram.send_message(msg, ticker)
-                    self._registrar_alerta(fato["link"])
-                    total_insiders += 1
+                    elif fato["categoria"] == "INSIDER":
+                        msg = (
+                            f"👁️ *MOVIMENTAÇÃO DE INSIDER:* #{ticker}\n\n"
+                            f"📅 *Data:* {fato['data']}\n"
+                            f"📄 *Fato:* {fato['descricao']}\n\n"
+                            f"💡 *Sinal:* Insiders conhecem a empresa melhor\n"
+                            f"🔗 [Ler comunicado]({fato['link']})"
+                        )
+                        
+                        await self.telegram.send_message(msg, ticker)
+                        self._registrar_alerta(fato["link"])
+                        total_alertas += 1
         
-        logger.info(f"✅ Radar recompras: {total_recompras} | Insiders: {total_insiders}")
+        logger.info(f"✅ Radar fatos relevantes: {total_alertas} alertas")
+    
+    def _ja_enviado(self, link: str) -> bool:
+        return link in self.alertas_enviados
 
 # ==============================================================================
 # ORQUESTRADOR PRINCIPAL
@@ -512,7 +423,7 @@ class BotInvestimentos:
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
         self.telegram: Optional[TelegramBot] = None
-        self.scraper: Optional[FundamentusScraper] = None
+        self.scraper: Optional[RIScraper] = None
     
     async def inicializar(self):
         logger.info("🔧 Inicializando bot...")
@@ -526,7 +437,7 @@ class BotInvestimentos:
         
         self.session = aiohttp.ClientSession(connector=connector)
         self.telegram = TelegramBot(cfg.TOKEN, cfg.CHAT_ID, self.session)
-        self.scraper = FundamentusScraper(self.session)
+        self.scraper = RIScraper(self.session)
         
         logger.info("✅ Bot inicializado")
     
@@ -535,17 +446,20 @@ class BotInvestimentos:
             await self.session.close()
             logger.info("🔒 Sessões fechadas")
     
-    async def executar_rotina(self, salvar_debug_html: bool = True):
+    async def executar_rotina(self):
         """Executa toda a rotina"""
         try:
             await self.inicializar()
+            
+            # Apenas os 3 tickers de RI
+            tickers_ri = ["CMIG4", "BBAS3", "SAPR11"]
             
             radar_div = RadarDividendos(self.scraper, self.telegram)
             radar_rec = RadarRecomprasInsiders(self.scraper, self.telegram)
             
             await asyncio.gather(
-                radar_div.executar(cfg.MEUS_PAPEIS, salvar_debug_html=salvar_debug_html),
-                radar_rec.executar(cfg.MEUS_PAPEIS)
+                radar_div.executar(tickers_ri),
+                radar_rec.executar(tickers_ri)
             )
             
             logger.info("✅ Rotina finalizada com sucesso")
@@ -560,13 +474,12 @@ class BotInvestimentos:
 # ==============================================================================
 async def main():
     bot = BotInvestimentos()
-    # Salva HTML de debug na primeira execução
-    await bot.executar_rotina(salvar_debug_html=True)
+    await bot.executar_rotina()
 
 if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("🤖 RADAR IDIV - Bot de Investimentos B3")
-    logger.info("🔍 Versão DEBUG - Salvando HTML para análise")
+    logger.info("🏢 Fonte: Sites de RI (CMIG4, BBAS3, SAPR11)")
     logger.info("=" * 60)
     
     asyncio.run(main())
