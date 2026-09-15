@@ -1,8 +1,7 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 Fonte: Yahoo Finance
-Versão: Factor Investing (Quality + Low Vol)
-Gestão de Ativos: Simplificada
+Versão: Rotinas por Frequência (Diária/Semanal/Mensal)
 """
 
 import yfinance as yf
@@ -12,6 +11,7 @@ from datetime import datetime, timedelta
 import logging
 import pandas as pd
 import numpy as np
+import calendar
 
 # Logging
 logging.basicConfig(
@@ -28,7 +28,7 @@ TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
 CHAT_ID = '566929604'
 
 # ==============================================================================
-# 📋 LISTA DE ATIVOS (FÁCIL GESTÃO)
+# 📋 LISTA DE ATIVOS
 # ==============================================================================
 MEUS_ATIVOS = [
     "CMIG4",
@@ -42,10 +42,6 @@ MEUS_ATIVOS = [
     "VBBR3",
     "SAUD3",
     "DEXP3",
-    "VALE3",
-    "PETR4",
-    "BBSE3",
-    "CXSE3",
 ]
 
 CONFIG_PADRAO = {
@@ -61,7 +57,7 @@ CONFIG_POR_TICKER = {
 }
 
 def carregar_meus_papeis():
-    """Carrega lista de ativos com configurações"""
+    """Carrega lista de ativos"""
     meus_papeis = []
     
     for ticker in MEUS_ATIVOS:
@@ -78,7 +74,7 @@ def carregar_meus_papeis():
             "dy_medio": config["dy_medio"],
         })
     
-    logger.info(f"📋 {len(meus_papeis)} ativos carregados: {', '.join(MEUS_ATIVOS)}")
+    logger.info(f"📋 {len(meus_papeis)} ativos carregados")
     return meus_papeis
 
 MEUS_PAPEIS = carregar_meus_papeis()
@@ -88,9 +84,7 @@ MEUS_PAPEIS = carregar_meus_papeis()
 # ==============================================================================
 THRESHOLDS = {
     "dividend_yield_min": 0.06,
-    "payout_max": 0.80,
     "price_target_upside": 0.20,
-    "revenue_decline": -0.10,
     "dividend_cut": -0.20,
     "margem_seguranca_min": 0.20,
 }
@@ -102,6 +96,52 @@ PESOS_FATORES = {
     "dividend": 0.15,
     "momentum": 0.10,
 }
+
+# ==============================================================================
+# CONTROLE DE FREQUÊNCIA
+# ==============================================================================
+def eh_segunda_feira():
+    """Verifica se hoje é segunda-feira"""
+    return datetime.now().weekday() == 0  # 0 = segunda
+
+def eh_primeiro_dia_util():
+    """Verifica se hoje é o primeiro dia útil do mês"""
+    hoje = datetime.now()
+    
+    # Pega o primeiro dia do mês
+    primeiro_dia = datetime(hoje.year, hoje.month, 1)
+    
+    # Se cair no fim de semana, pula para segunda
+    if primeiro_dia.weekday() == 5:  # Sábado
+        primeiro_dia_util = primeiro_dia + timedelta(days=2)
+    elif primeiro_dia.weekday() == 6:  # Domingo
+        primeiro_dia_util = primeiro_dia + timedelta(days=1)
+    else:
+        primeiro_dia_util = primeiro_dia
+    
+    # Verifica se hoje é o primeiro dia útil
+    return (hoje.day == primeiro_dia_util.day and 
+            hoje.month == primeiro_dia_util.month and 
+            hoje.year == primeiro_dia_util.year)
+
+def verificar_rotinas():
+    """Retorna quais rotinas devem rodar hoje"""
+    hoje = datetime.now()
+    
+    rotinas = {
+        "diaria": True,  # Sempre roda
+        "semanal": eh_segunda_feira(),
+        "mensal": eh_primeiro_dia_util(),
+    }
+    
+    logger.info(f"📅 Rotinas hoje: Diária={rotinas['diaria']}, Semanal={rotinas['semanal']}, Mensal={rotinas['mensal']}")
+    
+    if rotinas["mensal"]:
+        logger.info("📅 Hoje é o primeiro dia útil do mês!")
+    elif rotinas["semanal"]:
+        logger.info("📅 Hoje é segunda-feira!")
+    
+    return rotinas
 
 # ==============================================================================
 # TELEGRAM
@@ -642,41 +682,41 @@ def analisar_acao(ticker):
 # ==============================================================================
 # ALERTAS
 # ==============================================================================
-def gerar_alertas(dados, hist, papel_config):
-    """Gera alertas"""
+def gerar_alertas(dados, hist, papel_config, rotinas):
+    """Gera alertas baseado nas rotinas ativas"""
     alertas = []
     
-    score_composto = calcular_score_composto(dados, hist, papel_config)
-    dados["score_composto"] = score_composto
+    # Score Composto (MENSAL)
+    if rotinas["mensal"]:
+        score_composto = calcular_score_composto(dados, hist, papel_config)
+        dados["score_composto"] = score_composto
+        
+        if score_composto["score_total"] >= 70:
+            alertas.append({
+                "tipo": "SCORE_ALTO",
+                "titulo": "🟢 Score Factor Investing Alto",
+                "mensagem": f"Score: {score_composto['score_total']:.0f}/100 ({score_composto['classificacao']})\nQuality: {score_composto['fatores']['quality']['score']:.0f} | Low Vol: {score_composto['fatores']['low_vol']['score']:.0f}"
+            })
     
-    if score_composto["score_total"] >= 70:
-        alertas.append({
-            "tipo": "SCORE_ALTO",
-            "titulo": "🟢 Score Factor Investing Alto",
-            "mensagem": f"Score: {score_composto['score_total']:.0f}/100 ({score_composto['classificacao']})\nQuality: {score_composto['fatores']['quality']['score']:.0f} | Low Vol: {score_composto['fatores']['low_vol']['score']:.0f}"
-        })
+    # DY Alto (SEMANAL)
+    if rotinas["semanal"]:
+        if dados["dividend_yield"] and dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
+            alertas.append({
+                "tipo": "DY_ALTO",
+                "titulo": "🟢 Dividend Yield Atraente",
+                "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
+            })
     
-    if dados["dividend_yield"] and dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
-        alertas.append({
-            "tipo": "DY_ALTO",
-            "titulo": "🟢 Dividend Yield Atraente",
-            "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
-        })
+    # Upside (SEMANAL)
+    if rotinas["semanal"]:
+        if dados["upside"] and dados["upside"] > THRESHOLDS["price_target_upside"]:
+            alertas.append({
+                "tipo": "UPSIDE",
+                "titulo": "🟢 Upside Potencial",
+                "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
+            })
     
-    if dados["payout_ratio"] and dados["payout_ratio"] > THRESHOLDS["payout_max"]:
-        alertas.append({
-            "tipo": "PAYOUT_ALTO",
-            "titulo": "🟡 Payout Elevado",
-            "mensagem": f"Payout: {dados['payout_ratio']:.1%} (máximo: {THRESHOLDS['payout_max']:.0%})\n⚠️ Risco de corte de dividendos"
-        })
-    
-    if dados["upside"] and dados["upside"] > THRESHOLDS["price_target_upside"]:
-        alertas.append({
-            "tipo": "UPSIDE",
-            "titulo": "🟢 Upside Potencial",
-            "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
-        })
-    
+    # Corte Dividendo (DIÁRIO - sempre verifica)
     for alerta in dados.get("alertas", []):
         if "Dividendo caiu" in alerta:
             alertas.append({
@@ -685,15 +725,17 @@ def gerar_alertas(dados, hist, papel_config):
                 "mensagem": alerta
             })
     
-    vi = calcular_valor_intrinseco(dados, papel_config)
-    dados["valor_intrinseco"] = vi
-    
-    if vi["desconto_final"] >= THRESHOLDS["margem_seguranca_min"]:
-        alertas.append({
-            "tipo": "VALOR_INTRINSECO",
-            "titulo": "🟢 Desconto vs Valor Intrínseco",
-            "mensagem": f"Desconto: {vi['desconto_final']:.1%}\nVI: R$ {vi['vi_final']:.2f} | Preço: R$ {vi['preco_atual']:.2f}\n({vi['classificacao']})"
-        })
+    # Valor Intrínseco (MENSAL)
+    if rotinas["mensal"]:
+        vi = calcular_valor_intrinseco(dados, papel_config)
+        dados["valor_intrinseco"] = vi
+        
+        if vi["desconto_final"] >= THRESHOLDS["margem_seguranca_min"]:
+            alertas.append({
+                "tipo": "VALOR_INTRINSECO",
+                "titulo": "🟢 Desconto vs Valor Intrínseco",
+                "mensagem": f"Desconto: {vi['desconto_final']:.1%}\nVI: R$ {vi['vi_final']:.2f} | Preço: R$ {vi['preco_atual']:.2f}\n({vi['classificacao']})"
+            })
     
     return alertas
 
@@ -707,135 +749,124 @@ def formatar_tabela_telegram(dados_lista):
     
     hoje = datetime.now().strftime("%d/%m/%Y")
     
-    msg = "📊 *RESUMO DIÁRIO - FACTOR INVESTING*\n"
+    msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n"
     msg += f"{hoje}\n\n"
     msg += "```\n"
     
-    msg += f"{'Ativo':<7} | {'Preço':<8} | {'Score':<8} | {'Qlty':<6} | {'LowV':<6} | {'Status':<7}\n"
-    msg += f"{'-'*7} | {'-'*8} | {'-'*8} | {'-'*6} | {'-'*6} | {'-'*7}\n"
+    msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'P/L':<6} | {'P/VP':<6} | {'Status':<7}\n"
+    msg += f"{'-'*7} | {'-'*8} | {'-'*7} | {'-'*6} | {'-'*6} | {'-'*7}\n"
     
-    for dados in sorted(dados_lista, key=lambda x: x.get('score_composto', {}).get('score_total', 0), reverse=True):
+    for dados in sorted(dados_lista, key=lambda x: x.get('dividend_yield', 0), reverse=True):
         ticker = dados["ticker"]
         preco = dados["preco_atual"] or 0
-        score = dados.get("score_composto", {})
-        score_total = score.get("score_total", 0)
+        dy = dados["dividend_yield"] or 0
+        pe = dados["pe_ratio"] or 0
+        pb = dados["pb_ratio"] or 0
         
-        score_quality = score.get("fatores", {}).get("quality", {}).get("score", 0)
-        score_low_vol = score.get("fatores", {}).get("low_vol", {}).get("score", 0)
+        icone_dy = "🟢" if dy > 0.06 else "🟡" if dy > 0.04 else "🔴"
         
-        icone_score = "🟢" if score_total >= 70 else "🟡" if score_total >= 60 else "🔴"
-        
-        if score_total >= 75:
+        if dy > 0.06 and pe < 8:
             status = "🟢 Buy"
-        elif score_total >= 65:
+        elif dy > 0.04 or pe < 10:
             status = "🟡 Hold"
         else:
             status = "🔴 Sell"
         
-        msg += f"{ticker:<7} | R$ {preco:>5.2f} | {score_total:>5.0f} {icone_score} | {score_quality:>5.0f} | {score_low_vol:>5.0f} | {status:<7}\n"
+        msg += f"{ticker:<7} | R$ {preco:>5.2f} | {dy:>6.1%} {icone_dy} | {pe:>5.2f} | {pb:>5.2f} | {status:<7}\n"
     
     msg += "```\n\n"
-    msg += "🟢 Score > 70  |  🟡 60-70  |  🔴 < 60\n"
-    msg += "Pesos: Quality 30% | Low Vol 25% | Value 20% | Div 15% | Mom 10%\n"
+    msg += "🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
     
     return msg
 
-def formatar_alertas_telegram(alertas_lista):
-    """Formata alertas"""
+def formatar_alertas_telegram(alertas_lista, rotinas):
+    """Formata alertas baseado nas rotinas"""
     if not alertas_lista:
         return None
     
-    score_alto = [a for a in alertas_lista if a['tipo'] == 'SCORE_ALTO']
-    vi_alertas = [a for a in alertas_lista if a['tipo'] == 'VALOR_INTRINSECO']
-    dy_alto = [a for a in alertas_lista if a['tipo'] == 'DY_ALTO']
-    payout_alto = [a for a in alertas_lista if a['tipo'] == 'PAYOUT_ALTO']
-    upside = [a for a in alertas_lista if a['tipo'] == 'UPSIDE']
-    
     msg = ""
     
-    if score_alto:
-        msg += "🟢 *SCORE FACTOR INVESTING ALTO* (≥70)\n\n"
-        msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Score':<8} | {'Classif.':<12}\n"
-        msg += f"{'-'*7} | {'-'*8} | {'-'*12}\n"
-        
-        for alerta in score_alto:
-            ticker = alerta['ticker']
-            score_match = re.search(r'Score: ([\d.]+)/100', alerta['mensagem'])
-            classif_match = re.search(r'\(([\w\s]+)\)', alerta['mensagem'])
+    # Score Alto (MENSAL)
+    if rotinas["mensal"]:
+        score_alto = [a for a in alertas_lista if a['tipo'] == 'SCORE_ALTO']
+        if score_alto:
+            msg += "🟢 *SCORE FACTOR INVESTING ALTO* (≥70) - Mensal\n\n"
+            msg += "```\n"
+            msg += f"{'Ativo':<7} | {'Score':<8} | {'Classif.':<12}\n"
+            msg += f"{'-'*7} | {'-'*8} | {'-'*12}\n"
             
-            score_val = score_match.group(1) if score_match else 'N/A'
-            classif_val = classif_match.group(1) if classif_match else 'N/A'
+            for alerta in score_alto:
+                ticker = alerta['ticker']
+                score_match = re.search(r'Score: ([\d.]+)/100', alerta['mensagem'])
+                classif_match = re.search(r'\(([\w\s]+)\)', alerta['mensagem'])
+                
+                score_val = score_match.group(1) if score_match else 'N/A'
+                classif_val = classif_match.group(1) if classif_match else 'N/A'
+                
+                msg += f"{ticker:<7} | {score_val:<8} | {classif_val:<12}\n"
             
-            msg += f"{ticker:<7} | {score_val:<8} | {classif_val:<12}\n"
-        
-        msg += "```\n\n"
+            msg += "```\n\n"
     
-    if vi_alertas:
-        msg += "🟢 *DESCONTO VS VALOR INTRÍNSECO* (≥20%)\n\n"
-        msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Preço':<9} | {'VI':<9} | {'Desc.':<8}\n"
-        msg += f"{'-'*7} | {'-'*9} | {'-'*9} | {'-'*8}\n"
-        
-        for alerta in vi_alertas:
-            ticker = alerta['ticker']
-            preco_match = re.search(r'Preço: R\$ ([\d.]+)', alerta['mensagem'])
-            vi_match = re.search(r'VI: R\$ ([\d.]+)', alerta['mensagem'])
-            desc_match = re.search(r'Desconto: ([\d.]+%)', alerta['mensagem'])
+    # Valor Intrínseco (MENSAL)
+    if rotinas["mensal"]:
+        vi_alertas = [a for a in alertas_lista if a['tipo'] == 'VALOR_INTRINSECO']
+        if vi_alertas:
+            msg += "🟢 *DESCONTO VS VALOR INTRÍNSECO* (≥20%) - Mensal\n\n"
+            msg += "```\n"
+            msg += f"{'Ativo':<7} | {'Preço':<9} | {'VI':<9} | {'Desc.':<8}\n"
+            msg += f"{'-'*7} | {'-'*9} | {'-'*9} | {'-'*8}\n"
             
-            preco = preco_match.group(1) if preco_match else 'N/A'
-            vi = vi_match.group(1) if vi_match else 'N/A'
-            desc = desc_match.group(1) if desc_match else 'N/A'
+            for alerta in vi_alertas:
+                ticker = alerta['ticker']
+                preco_match = re.search(r'Preço: R\$ ([\d.]+)', alerta['mensagem'])
+                vi_match = re.search(r'VI: R\$ ([\d.]+)', alerta['mensagem'])
+                desc_match = re.search(r'Desconto: ([\d.]+%)', alerta['mensagem'])
+                
+                preco = preco_match.group(1) if preco_match else 'N/A'
+                vi = vi_match.group(1) if vi_match else 'N/A'
+                desc = desc_match.group(1) if desc_match else 'N/A'
+                
+                msg += f"{ticker:<7} | R$ {preco:<8} | R$ {vi:<8} | {desc:<8}\n"
             
-            msg += f"{ticker:<7} | R$ {preco:<8} | R$ {vi:<8} | {desc:<8}\n"
-        
-        msg += "```\n\n"
+            msg += "```\n\n"
     
-    if dy_alto:
-        msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%)\n\n"
-        msg += "```\n"
-        msg += f"{'Ativo':<7} | {'DY Atual':<9} | {'Threshold':<9}\n"
-        msg += f"{'-'*7} | {'-'*9} | {'-'*9}\n"
-        
-        for alerta in dy_alto:
-            ticker = alerta['ticker']
-            dy_match = re.search(r'DY atual: ([\d.]+%)', alerta['mensagem'])
-            dy = dy_match.group(1) if dy_match else 'N/A'
-            msg += f"{ticker:<7} | {dy:<9} | {'>'  + ' 6.00%':<8}\n"
-        
-        msg += "```\n\n"
-    
-    if payout_alto:
-        msg += "🟡 *PAYOUT ELEVADO* (>80%) - Risco de Corte\n\n"
-        msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Payout':<9} | {'Threshold':<9}\n"
-        msg += f"{'-'*7} | {'-'*9} | {'-'*9}\n"
-        
-        for alerta in payout_alto:
-            ticker = alerta['ticker']
-            payout_match = re.search(r'Payout: ([\d.]+%)', alerta['mensagem'])
-            payout = payout_match.group(1) if payout_match else 'N/A'
-            msg += f"{ticker:<7} | {payout:<9} | {'>'  + ' 80.0%':<8}\n"
-        
-        msg += "```\n\n"
-    
-    if upside:
-        msg += "🟢 *UPSIDE POTENCIAL* (>20%)\n\n"
-        msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Upside':<9} | {'Alvo':<12}\n"
-        msg += f"{'-'*7} | {'-'*9} | {'-'*12}\n"
-        
-        for alerta in upside:
-            ticker = alerta['ticker']
-            upside_match = re.search(r'Upside: ([\d.]+%)', alerta['mensagem'])
-            alvo_match = re.search(r'alvo: R\$ ([\d.]+)', alerta['mensagem'])
+    # DY Alto (SEMANAL)
+    if rotinas["semanal"]:
+        dy_alto = [a for a in alertas_lista if a['tipo'] == 'DY_ALTO']
+        if dy_alto:
+            msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%) - Semanal\n\n"
+            msg += "```\n"
+            msg += f"{'Ativo':<7} | {'DY Atual':<9} | {'Threshold':<9}\n"
+            msg += f"{'-'*7} | {'-'*9} | {'-'*9}\n"
             
-            upside_val = upside_match.group(1) if upside_match else 'N/A'
-            alvo_val = alvo_match.group(1) if alvo_match else 'N/A'
+            for alerta in dy_alto:
+                ticker = alerta['ticker']
+                dy_match = re.search(r'DY atual: ([\d.]+%)', alerta['mensagem'])
+                dy = dy_match.group(1) if dy_match else 'N/A'
+                msg += f"{ticker:<7} | {dy:<9} | {'>'  + ' 6.00%':<8}\n"
             
-            msg += f"{ticker:<7} | {upside_val:<9} | {'R$ ' + str(alvo_val):<11}\n"
-        
-        msg += "```\n\n"
+            msg += "```\n\n"
+    
+    # Upside (SEMANAL)
+    if rotinas["semanal"]:
+        upside = [a for a in alertas_lista if a['tipo'] == 'UPSIDE']
+        if upside:
+            msg += "🟢 *UPSIDE POTENCIAL* (>20%) - Semanal\n\n"
+            msg += "```\n"
+            msg += f"{'Ativo':<7} | {'Upside':<9} | {'Alvo':<12}\n"
+            msg += f"{'-'*7} | {'-'*9} | {'-'*12}\n"
+            
+            for alerta in upside:
+                ticker = alerta['ticker']
+                upside_match = re.search(r'Upside: ([\d.]+%)', alerta['mensagem'])
+                alvo_match = re.search(r'alvo: R\$ ([\d.]+)', alerta['mensagem'])
+                
+                upside_val = upside_match.group(1) if upside_match else 'N/A'
+                alvo_val = alvo_match.group(1) if alvo_match else 'N/A'
+                
+                msg += f"{ticker:<7} | {upside_val:<9} | {'R$ ' + str(alvo_val):<11}\n"
+            
+            msg += "```\n\n"
     
     return msg
 
@@ -863,11 +894,11 @@ def formatar_data_com_telegram(dados_com):
     return msg
 
 def formatar_factors_detalhado(dados_factors):
-    """Formata tabela detalhada"""
+    """Formata tabela detalhada (MENSAL)"""
     if not dados_factors:
         return None
     
-    msg = "🛡️ *SCORE POR FATOR - DETALHADO*\n\n"
+    msg = "🛡️ *SCORE POR FATOR - DETALHADO* - Mensal\n\n"
     msg += "```\n"
     msg += f"{'Ativo':<7} | {'Total':<8} | {'Qlty':<7} | {'LowV':<7} | {'Value':<7} | {'Div':<7} | {'Mom':<7}\n"
     msg += f"{'-'*7} | {'-'*8} | {'-'*7} | {'-'*7} | {'-'*7} | {'-'*7} | {'-'*7}\n"
@@ -898,6 +929,9 @@ def main():
     logger.info(f"🤖 RADAR IDIV - {len(MEUS_PAPEIS)} ativos")
     logger.info("="*60)
     
+    # Verifica rotinas
+    rotinas = verificar_rotinas()
+    
     hoje = datetime.now().strftime("%d/%m/%Y")
     enviar_telegram(f"🤖 *Radar IDIV | {hoje}*\nIniciando monitoramento de {len(MEUS_PAPEIS)} ativos...")
     
@@ -916,7 +950,7 @@ def main():
         acao = yf.Ticker(f"{ticker}.SA")
         hist = acao.history(period="6mo")
         
-        alertas = gerar_alertas(dados, hist, papel)
+        alertas = gerar_alertas(dados, hist, papel, rotinas)
         for alerta in alertas:
             alertas_gerais.append({
                 "ticker": ticker,
@@ -927,6 +961,7 @@ def main():
         
         todos_dados.append(dados)
         
+        # Data COM (DIÁRIO)
         if dados["ex_dividend_date"]:
             data_com = datetime.fromtimestamp(dados["ex_dividend_date"])
             dias_para_com = (data_com - datetime.now()).days
@@ -941,42 +976,49 @@ def main():
                     "dividend_yield": dados["dividend_yield"]
                 })
         
-        score = dados.get("score_composto", {})
-        if score.get("score_total", 0) > 0:
-            dados_factors_detalhado.append({
-                "ticker": ticker,
-                "score_total": score["score_total"],
-                "classificacao": score["classificacao"],
-                "fatores": score["fatores"]
-            })
+        # Score detalhado (MENSAL)
+        if rotinas["mensal"]:
+            score = dados.get("score_composto", {})
+            if score.get("score_total", 0) > 0:
+                dados_factors_detalhado.append({
+                    "ticker": ticker,
+                    "score_total": score["score_total"],
+                    "classificacao": score["classificacao"],
+                    "fatores": score["fatores"]
+                })
     
+    # Tabela Data COM (DIÁRIO)
     if dados_data_com:
         msg_com = formatar_data_com_telegram(dados_data_com)
         if msg_com:
             enviar_telegram(msg_com)
     
+    # Tabela Alertas (SEMANAL/MENSAL)
     if alertas_gerais:
-        msg_alertas = formatar_alertas_telegram(alertas_gerais)
+        msg_alertas = formatar_alertas_telegram(alertas_gerais, rotinas)
         if msg_alertas:
             enviar_telegram(msg_alertas)
     
+    # Tabela Resumo (DIÁRIO)
     if todos_dados:
         msg_tabela = formatar_tabela_telegram(todos_dados)
         if msg_tabela:
             enviar_telegram(msg_tabela)
     
-    if dados_factors_detalhado:
+    # Tabela Factors Detalhado (MENSAL)
+    if rotinas["mensal"] and dados_factors_detalhado:
         msg_factors = formatar_factors_detalhado(dados_factors_detalhado)
         if msg_factors:
             enviar_telegram(msg_factors)
     
+    # Mensagem final
     msg_final = (
         f"✅ *Monitoramento Concluído!*\n\n"
         f"📊 Ativos analisados: {len(todos_dados)}\n"
-        f"🔔 Alertas de dividendos: {len(dados_data_com)}\n"
+        f"💰 Alertas Data COM: {len(dados_data_com)}\n"
         f"📈 Alertas de fundamentos: {len(alertas_gerais)}\n"
-        f"🛡️ Ativos com score > 70: {len([a for a in alertas_gerais if a['tipo'] == 'SCORE_ALTO'])}\n"
-        f"📣 Total: {len(dados_data_com) + len(alertas_gerais)} alertas"
+        f"📣 Total: {len(dados_data_com) + len(alertas_gerais)} alertas\n\n"
+        f"📅 Rotinas: Diária ✅ | Semanal {'✅' if rotinas['semanal'] else '❌'} | Mensal {'✅' if rotinas['mensal'] else '❌'}"
     )
     enviar_telegram(msg_final)
     
