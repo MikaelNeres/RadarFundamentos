@@ -28,17 +28,50 @@ class Config:  # ← Removido @dataclass
     RATE_LIMIT_DELAY: float = 0.5
     
     MEUS_PAPEIS: List[Dict[str, str]] = [
-        {"ticker": "CMIG4", "nome": "CEMIG"},
-        {"ticker": "SAPR11", "nome": "SANEPAR"},
-        {"ticker": "ISAE4", "nome": "ISA ENERGIA BRASIL"},
-        {"ticker": "ABCB4", "nome": "BANCO ABC BRASIL"},
-        {"ticker": "LOGG3", "nome": "LOG COMMERCIAL PROPERTIES"},
-        {"ticker": "BBAS3", "nome": "BANCO DO BRASIL"},
-        {"ticker": "FIQE3", "nome": "UNIFIQUE"},
-        {"ticker": "GGBR4", "nome": "GERDAU"},
-        {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
-        {"ticker": "SAUD3", "nome": "BRADSAÚDE"},
-        {"ticker": "DEXP3", "nome": "DEXCO"},
+    # Utilities
+    {"ticker": "CMIG4", "nome": "CEMIG"},
+    {"ticker": "CPFE3", "nome": "CPFL ENERGIA"},
+    {"ticker": "EQTL3", "nome": "EQUATORIAL"},
+    {"ticker": "TAEE11", "nome": "TAESA"},
+    
+    # Bancos
+    {"ticker": "BBAS3", "nome": "BANCO DO BRASIL"},
+    {"ticker": "SANB11", "nome": "SANTANDER BR"},
+    {"ticker": "BBSE3", "nome": "BBSEGURIDADE"},
+    {"ticker": "PSSA3", "nome": "PORTO SEGURO"},
+    
+    # Seguros
+    {"ticker": "BBSE3", "nome": "BBSEGURIDADE"},
+    {"ticker": "PSSA3", "nome": "PORTO SEGURO"},
+    {"ticker": "IRBR3", "nome": "IRBBRASIL"},
+    
+    # Saneamento
+    {"ticker": "SAPR11", "nome": "SANEPAR"},
+    {"ticker": "SBSP3", "nome": "SABESP"},
+    
+    # Energia
+    {"ticker": "ISAE4", "nome": "ISA ENERGIA"},
+    {"ticker": "CPFE3", "nome": "CPFL ENERGIA"},
+    
+    # Outros
+    {"ticker": "ABCB4", "nome": "ABC BRASIL"},
+    {"ticker": "BRAP4", "nome": "BRADESPAR"},
+    {"ticker": "CSNA3", "nome": "SID NACIONAL"},
+    {"ticker": "GGBR4", "nome": "GERDAU"},
+    {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
+    {"ticker": "LOGG3", "nome": "LOG PROPERTIES"},
+    {"ticker": "RADL3", "nome": "RAIADROGASIL"},
+    {"ticker": "CYRE3", "nome": "CYRELA"},
+    {"ticker": "MRVE3", "nome": "MRV"},
+    {"ticker": "TEND3", "nome": "TENDA"},
+    {"ticker": "DXCO3", "nome": "DEXCO"},
+    {"ticker": "PETR4", "nome": "PETROBRAS PN"},
+    {"ticker": "VALE3", "nome": "VALE"},
+    {"ticker": "ABCB4", "nome": "BANCO ABC BRASIL"},
+    {"ticker": "BBAS3", "nome": "BANCO DO BRASIL"},
+    {"ticker": "FIQE3", "nome": "UNIFIQUE"},
+    {"ticker": "SAUD3", "nome": "BRADSAÚDE"},
+    {"ticker": "DEXP3", "nome": "DEXCO"},
     ]
 
 cfg = Config()
