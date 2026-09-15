@@ -42,6 +42,10 @@ MEUS_ATIVOS = [
     "VBBR3",
     "SAUD3",
     "DEXP3",
+    "VALE3",
+    "PETR4",
+    "BBSE3",
+    "CXSE3",
 ]
 
 CONFIG_PADRAO = {
