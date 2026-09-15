@@ -1,12 +1,12 @@
 """
 🤖 RADAR IDIV - Bot de Dividendos
 Fonte: Yahoo Finance (yfinance)
-Versão: Data COM + Pagamento (timezone corrigido)
+Versão: Filtra apenas dividendos relevantes (COM futura ou não paga)
 """
 
 import yfinance as yf
 import requests
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import logging
 
 # Logging
@@ -35,10 +35,6 @@ MEUS_PAPEIS = [
     {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
     {"ticker": "SAUD3", "nome": "BRADSAUDE"},
     {"ticker": "DEXP3", "nome": "DEXCO"},
-    {"ticker": "PETR4", "nome": "PETROBRAS"},
-    {"ticker": "VALE3", "nome": "VALE"},
-    {"ticker": "BBSE3", "nome": "BB SEGURIDADE"},
-    {"ticker": "ITUB4", "nome": "ITAU"},
 ]
 
 # ==============================================================================
@@ -119,6 +115,7 @@ def main():
     
     total_alertas = 0
     total_encontrados = 0
+    total_filtrados = 0  # Quantos foram filtrados (já pagos)
     
     # datetime.now() sem timezone (para bater com dados do yfinance)
     hoje = datetime.now().replace(tzinfo=None)
@@ -131,53 +128,64 @@ def main():
         total_encontrados += len(dividendos)
         
         for div in dividendos:
-            # Usa Data COM para filtro
             dias_atras_com = (hoje - div["data_com_obj"]).days
+            dias_para_pagamento = (div["data_pagamento_obj"] - hoje).days
             
-            # Filtra dividendos com Data COM nos últimos 60 dias
-            if 0 <= dias_atras_com <= 60:
-                # Calcula dias até pagamento (ou se já passou)
-                dias_para_pagamento = (div["data_pagamento_obj"] - hoje).days
-                
-                # Define status do pagamento
-                if dias_para_pagamento < 0:
-                    status_pagamento = "✅ Já pago"
-                elif dias_para_pagamento == 0:
-                    status_pagamento = "💰 Pagamento HOJE"
-                elif dias_para_pagamento <= 7:
-                    status_pagamento = f"⏳ Em {dias_para_pagamento} dias"
-                else:
-                    status_pagamento = f"📅 Em {dias_para_pagamento} dias ({div['data_pagamento']})"
-                
-                # Monta mensagem
-                msg = (
-                    f"#{ticker} | {mes_ano} | {nome}\n\n"
-                    f"💰 *DIVIDENDO*\n"
-                    f"💵 *Valor:* R$ {div['valor']:.4f}\n"
-                    f"📅 *Data COM:* {div['data_com']}\n"
-                    f"💳 *Pagamento:* {status_pagamento}\n"
-                    f"📊 *Dias desde COM:* {dias_atras_com}"
-                )
-                
-                enviar_telegram(msg)
-                total_alertas += 1
-                logger.info(f"✅ Alerta: {ticker} | COM: {div['data_com']} | Pag: {div['data_pagamento']}")
+            # REGRA DE FILTRO:
+            # ✅ Alerta se: Data COM é hoje ou no futuro
+            # ✅ Alerta se: Data COM passou mas ainda não pagou
+            # ❌ Não alerta se: Data COM passou E já pagou
+            
+            ja_passou_com = dias_atras_com > 0
+            ja_foi_pago = dias_para_pagamento < 0
+            
+            # Se já passou COM e já pagou → ignora
+            if ja_passou_com and ja_foi_pago:
+                logger.debug(f"⏭️ Ignorado: {ticker} | COM: {div['data_com']} (passou) | Pag: {div['data_pagamento']} (pago)")
+                total_filtrados += 1
+                continue
+            
+            # Determina status do pagamento
+            if dias_para_pagamento < 0:
+                status_pagamento = "✅ Já pago"
+            elif dias_para_pagamento == 0:
+                status_pagamento = "💰 Pagamento HOJE"
+            elif dias_para_pagamento <= 7:
+                status_pagamento = f"⏳ Em {dias_para_pagamento} dias"
+            else:
+                status_pagamento = f"📅 Em {dias_para_pagamento} dias ({div['data_pagamento']})"
+            
+            # Monta mensagem
+            msg = (
+                f"#{ticker} | {mes_ano} | {nome}\n\n"
+                f"💰 *DIVIDENDO*\n"
+                f"💵 *Valor:* R$ {div['valor']:.4f}\n"
+                f"📅 *Data COM:* {div['data_com']}\n"
+                f"💳 *Pagamento:* {status_pagamento}\n"
+                f"📊 *Dias até COM:* {-dias_atras_com}" if dias_atras_com < 0 else f"📊 *Dias desde COM:* {dias_atras_com}"
+            )
+            
+            enviar_telegram(msg)
+            total_alertas += 1
+            logger.info(f"✅ Alerta: {ticker} | COM: {div['data_com']} | Pag: {div['data_pagamento']}")
     
-    logger.info(f"✅ Fim: {total_alertas} alertas / {total_encontrados} encontrados")
+    logger.info(f"✅ Fim: {total_alertas} alertas / {total_encontrados} encontrados / {total_filtrados} filtrados")
     
     # Mensagem final
     if total_alertas == 0:
         enviar_telegram(
             f"ℹ️ *Status:*\n\n"
             f"📊 Ativos: {len(MEUS_PAPEIS)}\n"
-            f"🔍 Encontrados: {total_encontrados}\n"
-            f"⚠️ Nenhum dividendo com Data COM nos últimos 60 dias"
+            f"🔍 Dividendos: {total_encontrados}\n"
+            f"⏭️ Filtrados (já pagos): {total_filtrados}\n"
+            f"✅ Sem novos dividendos para acompanhar"
         )
     else:
         enviar_telegram(
             f"✅ *Concluído!*\n\n"
             f"📊 Ativos: {len(MEUS_PAPEIS)}\n"
-            f"🔍 Total: {total_encontrados}\n"
+            f"🔍 Dividendos: {total_encontrados}\n"
+            f"⏭️ Filtrados: {total_filtrados}\n"
             f"📣 Alertas: {total_alertas}"
         )
 
