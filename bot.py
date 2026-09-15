@@ -1,7 +1,7 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 Fonte: Yahoo Finance
-Versão: Tabelas Telegram (sem notícias)
+Versão: Tabelas Telegram Alinhadas (sem notícias)
 """
 
 import yfinance as yf
@@ -37,6 +37,10 @@ MEUS_PAPEIS = [
     {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
     {"ticker": "SAUD3", "nome": "BRADSAUDE"},
     {"ticker": "DEXP3", "nome": "DEXCO"},
+    {"ticker": "PETR4", "nome": "PETROBRAS"},
+    {"ticker": "VALE3", "nome": "VALE"},
+    {"ticker": "BBSE3", "nome": "BB SEGURIDADE"},
+    {"ticker": "ITUB4", "nome": "ITAU"},
 ]
 
 THRESHOLDS = {
@@ -205,7 +209,7 @@ def gerar_alertas(dados):
 # TABELAS TELEGRAM
 # ==============================================================================
 def formatar_tabela_telegram(dados_lista):
-    """Formata tabela para Telegram com código monoespaçado"""
+    """Formata tabela para Telegram com alinhamento perfeito"""
     if not dados_lista:
         return None
     
@@ -215,9 +219,11 @@ def formatar_tabela_telegram(dados_lista):
     msg += f"{hoje}\n\n"
     msg += "```\n"
     
-    msg += "Ativo   | DY (12m) | Payout  | P/L   | Ups.  | Status\n"
-    msg += "--------|----------|---------|-------|-------|--------\n"
+    # Header
+    msg += f"{'Ativo':<7} | {'DY (12m)':<9} | {'Payout':<8} | {'P/L':<7} | {'Ups.':<7} | {'Status':<7}\n"
+    msg += f"{'-'*7} | {'-'*9} | {'-'*8} | {'-'*7} | {'-'*7} | {'-'*7}\n"
     
+    # Linhas
     for dados in sorted(dados_lista, key=lambda x: x.get('dividend_yield', 0), reverse=True):
         ticker = dados["ticker"]
         dy = dados["dividend_yield"] or 0
@@ -235,7 +241,8 @@ def formatar_tabela_telegram(dados_lista):
         else:
             status = "🔴 Sell"
         
-        msg += f"{ticker:<7} | {dy:>6.2%} {icone_dy} | {payout:>6.1%} {icone_payout} | {pe:>6.2f} | {upside:>5.1%} | {status}\n"
+        # Formatação alinhada
+        msg += f"{ticker:<7} | {dy:>7.2%} {icone_dy} | {payout:>7.1%} {icone_payout} | {pe:>6.2f} | {upside:>6.1%} | {status:<7}\n"
     
     msg += "```\n\n"
     msg += "🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
@@ -244,7 +251,7 @@ def formatar_tabela_telegram(dados_lista):
     return msg
 
 def formatar_alertas_telegram(alertas_lista):
-    """Formata alertas em tabelas para Telegram"""
+    """Formata alertas com alinhamento perfeito"""
     if not alertas_lista:
         return None
     
@@ -255,39 +262,42 @@ def formatar_alertas_telegram(alertas_lista):
     
     msg = ""
     
+    # DY Alto
     if dy_alto:
         msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%)\n\n"
         msg += "```\n"
-        msg += "Ativo   | DY Atual | Threshold\n"
-        msg += "--------|----------|----------\n"
+        msg += f"{'Ativo':<7} | {'DY Atual':<9} | {'Threshold':<9}\n"
+        msg += f"{'-'*7} | {'-'*9} | {'-'*9}\n"
         
         for alerta in dy_alto:
             ticker = alerta['ticker']
             dy_match = re.search(r'DY atual: ([\d.]+%)', alerta['mensagem'])
             dy = dy_match.group(1) if dy_match else 'N/A'
-            msg += f"{ticker:<7} | {dy:<8} | > 6.00%\n"
+            msg += f"{ticker:<7} | {dy:<9} | {'>'  + ' 6.00%':<8}\n"
         
         msg += "```\n\n"
     
+    # Payout Alto
     if payout_alto:
         msg += "🟡 *PAYOUT ELEVADO* (>80%) - Risco de Corte\n\n"
         msg += "```\n"
-        msg += "Ativo   | Payout   | Threshold\n"
-        msg += "--------|----------|----------\n"
+        msg += f"{'Ativo':<7} | {'Payout':<9} | {'Threshold':<9}\n"
+        msg += f"{'-'*7} | {'-'*9} | {'-'*9}\n"
         
         for alerta in payout_alto:
             ticker = alerta['ticker']
             payout_match = re.search(r'Payout: ([\d.]+%)', alerta['mensagem'])
             payout = payout_match.group(1) if payout_match else 'N/A'
-            msg += f"{ticker:<7} | {payout:<8} | > 80.0%\n"
+            msg += f"{ticker:<7} | {payout:<9} | {'>'  + ' 80.0%':<8}\n"
         
         msg += "```\n\n"
     
+    # Upside
     if upside:
         msg += "🟢 *UPSIDE POTENCIAL* (>20%)\n\n"
         msg += "```\n"
-        msg += "Ativo   | Upside   | Alvo\n"
-        msg += "--------|----------|----------\n"
+        msg += f"{'Ativo':<7} | {'Upside':<9} | {'Alvo':<12}\n"
+        msg += f"{'-'*7} | {'-'*9} | {'-'*12}\n"
         
         for alerta in upside:
             ticker = alerta['ticker']
@@ -297,35 +307,36 @@ def formatar_alertas_telegram(alertas_lista):
             upside_val = upside_match.group(1) if upside_match else 'N/A'
             alvo_val = alvo_match.group(1) if alvo_match else 'N/A'
             
-            msg += f"{ticker:<7} | {upside_val:<8} | R$ {alvo_val}\n"
+            msg += f"{ticker:<7} | {upside_val:<9} | {'R$ ' + str(alvo_val):<11}\n"
         
         msg += "```\n\n"
     
+    # Corte Dividendo
     if corte_div:
         msg += "🔴 *CORTE DE DIVIDENDO*\n\n"
         msg += "```\n"
-        msg += "Ativo   | Variação  | Alerta\n"
-        msg += "--------|-----------|----------------\n"
+        msg += f"{'Ativo':<7} | {'Variação':<10} | {'Alerta':<16}\n"
+        msg += f"{'-'*7} | {'-'*10} | {'-'*16}\n"
         
         for alerta in corte_div:
             ticker = alerta['ticker']
             variacao_match = re.search(r'caiu ([\d.-]+%)', alerta['mensagem'])
             variacao = variacao_match.group(1) if variacao_match else 'N/A'
-            msg += f"{ticker:<7} | {variacao:<9} | ⚠️ Risco\n"
+            msg += f"{ticker:<7} | {variacao:<10} | {'⚠️ Risco':<16}\n"
         
         msg += "```\n\n"
     
     return msg
 
 def formatar_data_com_telegram(dados_com):
-    """Formata Data COM para Telegram"""
+    """Formata Data COM com alinhamento perfeito"""
     if not dados_com:
         return None
     
     msg = "💰 *DATA COM PRÓXIMA*\n\n"
     msg += "```\n"
-    msg += "Ativo   | Data COM   | Dias  | Valor    | DY\n"
-    msg += "--------|------------|-------|----------|------\n"
+    msg += f"{'Ativo':<7} | {'Data COM':<11} | {'Dias':<6} | {'Valor':<10} | {'DY':<7}\n"
+    msg += f"{'-'*7} | {'-'*11} | {'-'*6} | {'-'*10} | {'-'*7}\n"
     
     for dados in sorted(dados_com, key=lambda x: x["dias_para_com"]):
         ticker = dados["ticker"]
@@ -334,7 +345,7 @@ def formatar_data_com_telegram(dados_com):
         valor = dados["dividend_rate"]
         dy = dados["dividend_yield"]
         
-        msg += f"{ticker:<7} | {data_com:<10} | {dias:>5} | R$ {valor:>5.4f} | {dy:>6.2%}\n"
+        msg += f"{ticker:<7} | {data_com:<11} | {dias:>5}  | R$ {valor:>6.4f} | {dy:>6.2%}\n"
     
     msg += "```\n"
     
