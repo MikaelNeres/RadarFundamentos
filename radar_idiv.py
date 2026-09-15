@@ -1,7 +1,6 @@
 """
 🤖 RADAR IDIV - Bot Telegram
-Fonte: Brapi.dev (API gratuita da B3)
-Docs: https://brapi.dev
+Fontes: Fundamentus, StatusInvest, Yahoo Finance (fallback)
 """
 
 import os
@@ -10,6 +9,7 @@ import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import logging
+import re
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,12 +24,9 @@ logger = logging.getLogger(__name__)
 class Config:
     TOKEN: str = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
     CHAT_ID: str = '566929604'
-    TIMEOUT: int = 15
+    TIMEOUT: int = 20
+    MAX_RETRIES: int = 2
     
-    # Brapi.dev (gratuita, sem auth para testes)
-    BRAPI_BASE_URL = "https://brapi.dev/api"
-    
-    # Seus ativos
     MEUS_PAPEIS = [
         {"ticker": "CMIG4", "nome": "CEMIG"},
         {"ticker": "BBAS3", "nome": "BANCO DO BRASIL"},
@@ -69,146 +66,153 @@ class TelegramBot:
         if ticker:
             payload["reply_markup"] = {
                 "inline_keyboard": [[
-                    {"text": f"📈 {ticker}", "url": f"https://brapi.dev/quote/{ticker}"}
+                    {"text": f"📈 {ticker}", "url": f"https://statusinvest.com.br/acoes/{ticker.lower()}"}
                 ]]
             }
         
         try:
             async with self.session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    logger.info(f"✅ Telegram enviado")
-                    return True
+                logger.info(f"✅ Telegram: {ticker or 'OK'}")
+                return True
         except Exception as e:
-            logger.error(f"❌ Erro Telegram: {e}")
-        
+            logger.error(f"❌ Telegram: {e}")
         return False
 
 # ==============================================================================
-# BRAPI DEV API
+# MULTI-FONTE SCRAPER
 # ==============================================================================
-class BrapiAPI:
+class MultiFonteScraper:
     def __init__(self, session: aiohttp.ClientSession):
         self.session = session
-        self.base_url = cfg.BRAPI_BASE_URL
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'pt-BR,pt;q=0.9',
         }
     
     async def buscar_proventos(self, ticker: str) -> List[Dict]:
-        """Busca dividendos via Brapi.dev"""
-        logger.info(f"🔍 [Brapi] Buscando proventos: {ticker}")
+        """Busca proventos usando múltiplas fontes com fallback"""
+        logger.info(f"🔍 Buscando proventos: {ticker}")
         
-        # Endpoint de dividendos
-        url = f"{self.base_url}/v2/quote/{ticker}?dividends=true"
+        # Fonte 1: StatusInvest
+        proventos = await self._buscar_statusinvest(ticker)
+        if proventos:
+            logger.info(f"✅ StatusInvest: {len(proventos)} proventos")
+            return proventos
         
+        # Fonte 2: Fundamentus
+        proventos = await self._buscar_fundamentus(ticker)
+        if proventos:
+            logger.info(f"✅ Fundamentus: {len(proventos)} proventos")
+            return proventos
+        
+        # Fonte 3: Yahoo Finance
+        proventos = await self._buscar_yahoo(ticker)
+        if proventos:
+            logger.info(f"✅ Yahoo: {len(proventos)} proventos")
+            return proventos
+        
+        logger.warning(f"⚠️ Nenhuma fonte retornou dados para {ticker}")
+        return []
+    
+    async def _buscar_statusinvest(self, ticker: str) -> List[Dict]:
+        """Scraping StatusInvest"""
         try:
+            url = f"https://statusinvest.com.br/acoes/{ticker.lower()}"
+            
             async with self.session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=cfg.TIMEOUT)) as resp:
                 if resp.status != 200:
-                    logger.warning(f"⚠️ [Brapi] Status {resp.status} para {ticker}")
                     return []
                 
-                data = await resp.json()
-                
-                # Estrutura da resposta: { "results": { "dividends": [...] } }
-                resultados = data.get('results', {})
-                dividendos = resultados.get('dividends', [])
-                
-                logger.info(f"✅ [Brapi] {len(dividendos)} dividendos encontrados para {ticker}")
-                
-                # Formata proventos
-                proventos = []
-                for div in dividendos:
-                    try:
-                        # Brapi retorna: { "date": "2024-09-10", "amount": 0.35 }
-                        data_str = div.get('date', '')
-                        valor = float(div.get('amount', 0))
-                        
-                        if data_str and valor > 0:
-                            # Converte "2024-09-10" para "10/09/2024"
-                            data_obj = datetime.strptime(data_str, "%Y-%m-%d")
-                            data_com = data_obj.strftime("%d/%m/%Y")
-                            
-                            proventos.append({
-                                "data_com": data_com,
-                                "valor": valor,
-                                "tipo": "Dividendo",
-                                "fonte": "Brapi"
-                            })
-                    except (ValueError, KeyError) as e:
-                        logger.debug(f"⚠️ Erro parse div: {e}")
-                
-                return proventos[:10]
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"⏱️ Timeout Brapi para {ticker}")
-            return []
+                html = await resp.text(encoding='utf-8')
+                return self._parse_proventos_html(html, ticker, "StatusInvest")
         except Exception as e:
-            logger.error(f"❌ [Brapi] Erro: {e}")
+            logger.debug(f"⚠️ StatusInvest falhou: {e}")
             return []
     
-    async def buscar_fatos_relevantes(self, ticker: str) -> List[Dict]:
-        """Busca fatos relevantes via Brapi (limitado)"""
-        logger.info(f"🔍 [Brapi] Buscando fatos: {ticker}")
-        
-        # Brapi não tem endpoint direto de fatos relevantes
-        # Usamos notícias como fallback
-        url = f"{self.base_url}/v2/quote/{ticker}?news=true"
-        
+    async def _buscar_fundamentus(self, ticker: str) -> List[Dict]:
+        """Scraping Fundamentus"""
         try:
+            url = f"https://fundamentus.com.br/proventos.php?papel={ticker}&interface=classic"
+            
             async with self.session.get(url, headers=self.headers, timeout=aiohttp.ClientTimeout(total=cfg.TIMEOUT)) as resp:
                 if resp.status != 200:
                     return []
                 
-                data = await resp.json()
-                noticias = data.get('results', {}).get('news', [])
-                
-                # Filtra notícias sobre recompras/insiders
-                palavras_chave = {
-                    "recompra": "RECOMPRA",
-                    "buyback": "RECOMPRA",
-                    "ações próprias": "RECOMPRA",
-                    "diretor": "INSIDER",
-                    "conselho": "INSIDER",
-                }
-                
-                fatos = []
-                for noticia in noticias[:10]:
-                    titulo = noticia.get('title', '').lower()
-                    
-                    for palavra, categoria in palavras_chave.items():
-                        if palavra in titulo:
-                            fatos.append({
-                                "data": datetime.now().strftime("%d/%m/%Y"),
-                                "tipo": "FR",
-                                "descricao": noticia.get('title', ''),
-                                "categoria": categoria,
-                                "link": noticia.get('link', ''),
-                                "fonte": "Brapi"
-                            })
-                            break
-                
-                return fatos[:5]
-                
+                html = await resp.text(encoding='utf-8')
+                return self._parse_proventos_html(html, ticker, "Fundamentus")
         except Exception as e:
-            logger.error(f"❌ [Brapi] Erro fatos: {e}")
+            logger.debug(f"⚠️ Fundamentus falhou: {e}")
             return []
+    
+    async def _buscar_yahoo(self, ticker: str) -> List[Dict]:
+        """Yahoo Finance via yfinance (se instalado)"""
+        try:
+            import yfinance as yf
+            acao = yf.Ticker(f"{ticker}.SA")
+            dividendos = acao.dividends
+            
+            if dividendos.empty:
+                return []
+            
+            proventos = []
+            for data, valor in dividendos.items():
+                proventos.append({
+                    "data_com": data.strftime("%d/%m/%Y"),
+                    "valor": float(valor),
+                    "tipo": "Dividendo",
+                    "fonte": "Yahoo"
+                })
+            
+            return proventos[-10:]
+        except Exception as e:
+            logger.debug(f"⚠️ Yahoo falhou: {e}")
+            return []
+    
+    def _parse_proventos_html(self, html: str, ticker: str, fonte: str) -> List[Dict]:
+        """Parse genérico de HTML"""
+        proventos = []
+        
+        # Busca todas as datas e valores R$
+        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', html)
+        valores = re.findall(r'R\$\s*([\d.,]+)', html)
+        
+        logger.debug(f"  {fonte}: {len(datas)} datas, {len(valores)} valores")
+        
+        # Tenta parear datas e valores próximos
+        for i in range(min(len(datas), len(valores), 20)):
+            try:
+                valor_str = valores[i]
+                valor_limpo = valor_str.replace('.', '').replace(',', '.')
+                valor = float(valor_limpo)
+                
+                if 0.01 <= valor <= 100:
+                    proventos.append({
+                        "data_com": datas[i],
+                        "valor": valor,
+                        "tipo": "Dividendo",
+                        "fonte": fonte
+                    })
+            except (ValueError, IndexError):
+                pass
+        
+        return proventos[:10]
 
 # ==============================================================================
 # RADAR DE DIVIDENDOS
 # ==============================================================================
 class RadarDividendos:
-    def __init__(self, api: BrapiAPI, telegram: TelegramBot):
-        self.api = api
+    def __init__(self, scraper: MultiFonteScraper, telegram: TelegramBot):
+        self.scraper = scraper
         self.telegram = telegram
     
     async def executar(self, papeis: List[Dict[str, str]]):
-        logger.info("🚀 Iniciando radar de dividendos (Brapi)...")
+        logger.info("🚀 Iniciando radar de dividendos...")
         mes_ano = datetime.now().strftime("%b/%y").upper()
         
         await self.telegram.send_message(
             f"🤖 *Radar IDIV | {mes_ano}*\n"
-            f"Varredura de {len(papeis)} ativos (API Brapi) iniciada..."
+            f"Varredura de {len(papeis)} ativos iniciada..."
         )
         
         total_alertas = 0
@@ -218,7 +222,7 @@ class RadarDividendos:
             ticker = papel["ticker"]
             nome = papel["nome"]
             
-            proventos = await self.api.buscar_proventos(ticker)
+            proventos = await self.scraper.buscar_proventos(ticker)
             total_encontrados += len(proventos)
             
             # Filtra últimos 60 dias
@@ -240,84 +244,31 @@ class RadarDividendos:
             for prov in proventos_recentes:
                 msg = (
                     f"#{ticker} | {mes_ano} | {nome}\n\n"
-                    f"💰 *PROVENTO ENCONTRADO [Brapi]*\n"
+                    f"💰 *PROVENTO ENCONTRADO [{prov['fonte']}]*\n"
                     f"💵 *Valor:* R$ {prov['valor']:.4f} por ação\n"
                     f"📅 *Data COM:* {prov['data_com']}\n"
-                    f"📊 *Dias atrás:* {prov.get('dias_atras', 'N/A')} dias\n"
-                    f"📊 *Tipo:* {prov.get('tipo', 'Dividendo')}"
+                    f"📊 *Dias atrás:* {prov.get('dias_atras', 'N/A')} dias"
                 )
                 
                 await self.telegram.send_message(msg, ticker)
                 total_alertas += 1
         
-        logger.info(f"✅ Radar dividendos: {total_alertas} alertas / {total_encontrados} encontrados")
+        logger.info(f"✅ Radar: {total_alertas} alertas / {total_encontrados} encontrados")
         
         if total_alertas == 0:
             await self.telegram.send_message(
-                f"ℹ️ *Status da Varredura:*\n\n"
-                f"📊 Ativos varridos: {len(papeis)}\n"
-                f"🔍 Proventos encontrados: {total_encontrados}\n"
-                f"⚠️ Nenhum provento com Data COM nos últimos 60 dias\n\n"
-                f"💡 *Nota:* API Brapi retorna apenas dividendos históricos"
+                f"ℹ️ *Status:*\n\n"
+                f"📊 Ativos: {len(papeis)}\n"
+                f"🔍 Encontrados: {total_encontrados}\n"
+                f"⚠️ Nenhum provento nos últimos 60 dias"
             )
         else:
             await self.telegram.send_message(
-                f"✅ *Varredura Concluída!*\n\n"
-                f"📊 Ativos varridos: {len(papeis)}\n"
-                f"🔍 Total proventos: {total_encontrados}\n"
-                f"📣 Alertas enviados: {total_alertas}"
+                f"✅ *Concluído!*\n\n"
+                f"📊 Ativos: {len(papeis)}\n"
+                f"🔍 Total: {total_encontrados}\n"
+                f"📣 Alertas: {total_alertas}"
             )
-
-# ==============================================================================
-# RADAR DE RECOMPRAS
-# ==============================================================================
-class RadarRecompras:
-    def __init__(self, api: BrapiAPI, telegram: TelegramBot):
-        self.api = api
-        self.telegram = telegram
-        self.arquivo_cache = "alertas_enviados.txt"
-        self._carregar_cache()
-    
-    def _carregar_cache(self):
-        self.alertas_enviados = set()
-        if os.path.exists(self.arquivo_cache):
-            with open(self.arquivo_cache, "r", encoding="utf-8") as f:
-                self.alertas_enviados = set(f.read().splitlines())
-    
-    def _registrar_alerta(self, link: str):
-        self.alertas_enviados.add(link)
-        with open(self.arquivo_cache, "a", encoding="utf-8") as f:
-            f.write(f"{link}\n")
-    
-    async def executar(self, papeis: List[Dict[str, str]]):
-        logger.info("🚀 Iniciando radar de recompras...")
-        
-        total_alertas = 0
-        
-        for papel in papeis:
-            ticker = papel["ticker"]
-            
-            fatos = await self.api.buscar_fatos_relevantes(ticker)
-            
-            for fato in fatos:
-                if not self._ja_enviado(fato["link"]):
-                    if fato["categoria"] == "RECOMPRA":
-                        msg = (
-                            f"🚨 *RECOMPRA DETECTADA:* #{ticker}\n\n"
-                            f"📅 *Data:* {fato['data']}\n"
-                            f"📄 *Fato:* {fato['descricao'][:200]}...\n\n"
-                            f"💡 *Impacto:* Redução da base → LPA maior\n"
-                            f"🔗 [Ler mais]({fato['link']})"
-                        )
-                        
-                        await self.telegram.send_message(msg, ticker)
-                        self._registrar_alerta(fato["link"])
-                        total_alertas += 1
-        
-        logger.info(f"✅ Radar recompras: {total_alertas} alertas")
-    
-    def _ja_enviado(self, link: str) -> bool:
-        return link in self.alertas_enviados
 
 # ==============================================================================
 # ORQUESTRADOR
@@ -326,39 +277,33 @@ class BotInvestimentos:
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
         self.telegram: Optional[TelegramBot] = None
-        self.api: Optional[BrapiAPI] = None
+        self.scraper: Optional[MultiFonteScraper] = None
     
     async def inicializar(self):
-        logger.info("🔧 Inicializando bot...")
+        logger.info("🔧 Inicializando...")
         
         connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
         self.session = aiohttp.ClientSession(connector=connector)
         self.telegram = TelegramBot(cfg.TOKEN, cfg.CHAT_ID, self.session)
-        self.api = BrapiAPI(self.session)
+        self.scraper = MultiFonteScraper(self.session)
         
-        logger.info("✅ Bot inicializado (Brapi.dev)")
+        logger.info("✅ Inicializado")
     
     async def fechar(self):
         if self.session:
             await self.session.close()
-            logger.info("🔒 Sessões fechadas")
     
     async def executar_rotina(self):
         try:
             await self.inicializar()
             
-            radar_div = RadarDividendos(self.api, self.telegram)
-            radar_rec = RadarRecompras(self.api, self.telegram)
+            radar = RadarDividendos(self.scraper, self.telegram)
+            await radar.executar(cfg.MEUS_PAPEIS)
             
-            await asyncio.gather(
-                radar_div.executar(cfg.MEUS_PAPEIS),
-                radar_rec.executar(cfg.MEUS_PAPEIS)
-            )
-            
-            logger.info("✅ Rotina finalizada")
+            logger.info("✅ Finalizado")
             
         except Exception as e:
-            logger.error(f"❌ Erro crítico: {e}", exc_info=True)
+            logger.error(f"❌ Erro: {e}", exc_info=True)
         finally:
             await self.fechar()
 
@@ -371,8 +316,7 @@ async def main():
 
 if __name__ == "__main__":
     logger.info("=" * 60)
-    logger.info("🤖 RADAR IDIV - API Brapi.dev")
-    logger.info("📍 Fonte: https://brapi.dev")
+    logger.info("🤖 RADAR IDIV - Multi-Fonte")
     logger.info("=" * 60)
     
     asyncio.run(main())
