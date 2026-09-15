@@ -164,7 +164,7 @@ def formatar_noticias_google(ticker, nome, noticias):
 # ==============================================================================
 def analisar_acao(ticker):
     """
-    Analisa ação completa: dividendos, fundamentos, etc.
+    Analisa ação completa com cálculos manuais de DY e Payout
     """
     logger.info(f"🔍 Analisando: {ticker}")
     
@@ -172,67 +172,95 @@ def analisar_acao(ticker):
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
         
+        # Preço atual
+        preco_atual = info.get('currentPrice', info.get('regularMarketPrice', 0))
+        
+        # Dividendos dos últimos 12 meses
+        dividendos = acao.dividends
+        dividendos_12m = 0
+        
+        if not dividendos.empty:
+            hoje = datetime.now()
+            um_ano_atras = hoje - timedelta(days=365)
+            
+            for data, valor in dividendos.items():
+                # Remove timezone
+                if hasattr(data, 'tzinfo') and data.tzinfo is not None:
+                    data = data.replace(tzinfo=None)
+                
+                if data >= um_ano_atras:
+                    dividendos_12m += valor
+        
+        # Calcula Dividend Yield
+        if preco_atual and preco_atual > 0:
+            dividend_yield = dividendos_12m / preco_atual
+        else:
+            dividend_yield = 0
+        
+        # Dividend Rate
+        dividend_rate = dividendos_12m
+        
+        # Payout Ratio
+        eps = info.get('trailingEps', 0)
+        
+        if eps and eps > 0:
+            payout_ratio = dividendos_12m / eps
+        else:
+            payout_ratio = 0
+        
+        # Limita payout a 100%
+        payout_ratio = min(payout_ratio, 1.0)
+        
         dados = {
             "ticker": ticker,
             "nome": info.get('longName', ticker),
             "setor": info.get('sector', 'N/A'),
-            "preco_atual": info.get('currentPrice', info.get('regularMarketPrice', 0)),
-            
-            # Dividendos
-            "dividend_rate": info.get('dividendRate', 0),
-            "dividend_yield": info.get('dividendYield', 0),
+            "preco_atual": preco_atual,
+            "dividend_rate": dividend_rate,
+            "dividend_yield": dividend_yield,
+            "dividendos_12m": dividendos_12m,
             "ex_dividend_date": info.get('exDividendDate'),
-            "payout_ratio": info.get('payoutRatio', 0),
+            "payout_ratio": payout_ratio,
             "five_year_avg_dy": info.get('fiveYearAvgDividendYield', 0),
-            
-            # Valuation
             "pe_ratio": info.get('trailingPE', 0),
             "pb_ratio": info.get('priceToBook', 0),
             "ev_ebitda": info.get('enterpriseToEbitda', 0),
-            
-            # Preços-alvo
+            "eps": eps,
             "price_target_mean": info.get('targetMeanPrice', 0),
             "price_target_high": info.get('targetHighPrice', 0),
             "price_target_low": info.get('targetLowPrice', 0),
             "recommendation": info.get('recommendationKey', 'N/A'),
-            
-            # Histórico
-            "dividendos": acao.dividends,
+            "dividendos": dividendos,
             "actions": acao.actions,
             "splits": acao.splits,
-            
-            # Fundamentos
             "financials": acao.financials,
             "cashflow": acao.cashflow,
             "quarterly_cashflow": acao.quarterly_cashflow,
             "balance_sheet": acao.balance_sheet,
-            
-            # Sinais de alerta
             "alertas": []
         }
         
-        # Calcular upside/downside
-        if dados["preco_atual"] and dados["preco_atual"] > 0 and dados["price_target_mean"] and dados["price_target_mean"] > 0:
-            dados["upside"] = (dados["price_target_mean"] - dados["preco_atual"]) / dados["preco_atual"]
+        # Upside
+        if preco_atual > 0 and dados["price_target_mean"] > 0:
+            dados["upside"] = (dados["price_target_mean"] - preco_atual) / preco_atual
         else:
             dados["upside"] = 0
         
-        # Verificar corte de dividendo
-        if len(dados["dividendos"]) >= 2:
-            ultimo = dados["dividendos"].iloc[-1]
-            anterior = dados["dividendos"].iloc[-2]
+        # Corte de dividendo
+        if len(dividendos) >= 2:
+            ultimo = dividendos.iloc[-1]
+            anterior = dividendos.iloc[-2]
             if anterior > 0:
                 variacao = (ultimo - anterior) / anterior
                 if variacao < THRESHOLDS["dividend_cut"]:
                     dados["alertas"].append(f"⚠️ Dividendo caiu {variacao:.1%}")
         
-        logger.info(f"✅ Análise completa: {ticker}")
+        logger.info(f"✅ {ticker} | R$ {preco_atual:.2f} | DY: {dividend_yield:.2%} | Payout: {payout_ratio:.1%}")
         return dados
         
     except Exception as e:
-        logger.error(f"❌ Erro ao analisar {ticker}: {e}")
+        logger.error(f"❌ Erro {ticker}: {e}")
         return None
-
 # ==============================================================================
 # GERAR ALERTAS FUNDAMENTISTAS
 # ==============================================================================
