@@ -1,7 +1,7 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 Fonte: Yahoo Finance + Google News RSS
-Versão: Dividendos + Fundamentos + Notícias Reais
+Versão: Tabelas Organizadas + Alertas Individuais
 """
 
 import yfinance as yf
@@ -37,10 +37,6 @@ MEUS_PAPEIS = [
     {"ticker": "VBBR3", "nome": "VIBRA ENERGIA"},
     {"ticker": "SAUD3", "nome": "BRADSAUDE"},
     {"ticker": "DEXP3", "nome": "DEXCO"},
-    {"ticker": "PETR4", "nome": "PETROBRAS"},
-    {"ticker": "VALE3", "nome": "VALE"},
-    {"ticker": "BBSE3", "nome": "BB SEGURIDADE"},
-    {"ticker": "ITUB4", "nome": "ITAU"},
 ]
 
 THRESHOLDS = {
@@ -54,13 +50,13 @@ THRESHOLDS = {
 # ==============================================================================
 # TELEGRAM
 # ==============================================================================
-def enviar_telegram(mensagem, disable_web_preview=False):
+def enviar_telegram(mensagem, disable_web_preview=False, parse_mode="Markdown"):
     """Envia mensagem para Telegram"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": mensagem,
-        "parse_mode": "Markdown",
+        "parse_mode": parse_mode,
         "disable_web_page_preview": disable_web_preview
     }
     
@@ -79,20 +75,13 @@ def enviar_telegram(mensagem, disable_web_preview=False):
 # GOOGLE NEWS RSS
 # ==============================================================================
 def buscar_noticias_google(ticker, nome_empresa):
-    """
-    Busca notícias no Google News RSS
-    Returns lista de notícias ou [] se falhar
-    """
+    """Busca notícias no Google News RSS"""
     logger.info(f"🔍 Buscando notícias Google: {ticker}")
     
-    # Query otimizada para ações brasileiras
     query = f"{ticker} OR {nome_empresa.split()[0]} OR {nome_empresa} ação OR {nome_empresa} dividendos"
-    
-    # URL do RSS do Google News
     url = f"https://news.google.com/rss/search?q={query}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
     
     try:
-        # Parse RSS
         feed = feedparser.parse(url)
         
         if not feed.entries:
@@ -100,12 +89,10 @@ def buscar_noticias_google(ticker, nome_empresa):
             return []
         
         noticias = []
-        for entry in feed.entries[:5]:  # Últimas 5
-            # Extrai dados
+        for entry in feed.entries[:5]:
             titulo = entry.title if hasattr(entry, 'title') else ''
             link = entry.link if hasattr(entry, 'link') else ''
             
-            # Publisher (às vezes vem no título)
             publisher = "Google News"
             if hasattr(entry, 'source') and entry.source:
                 publisher = entry.source
@@ -115,10 +102,7 @@ def buscar_noticias_google(ticker, nome_empresa):
                     publisher = parts[0]
                     titulo = ' - '.join(parts[1:])
             
-            # Data de publicação
-            publicado = ''
-            if hasattr(entry, 'published'):
-                publicado = entry.published
+            publicado = entry.published if hasattr(entry, 'published') else ''
             
             if titulo and link:
                 noticias.append({
@@ -136,9 +120,7 @@ def buscar_noticias_google(ticker, nome_empresa):
         return []
 
 def formatar_noticias_google(ticker, nome, noticias):
-    """
-    Formata notícias do Google News para Telegram
-    """
+    """Formata notícias do Google News"""
     if not noticias:
         return None
     
@@ -149,7 +131,6 @@ def formatar_noticias_google(ticker, nome, noticias):
         link = noticia['link']
         publisher = noticia['publisher']
         
-        # Trunca título se muito longo
         if len(titulo) > 100:
             titulo = titulo[:97] + "..."
         
@@ -160,22 +141,19 @@ def formatar_noticias_google(ticker, nome, noticias):
     return msg
 
 # ==============================================================================
-# BUSCAR DADOS COMPLETOS DA AÇÃO
+# ANÁLISE DE AÇÕES
 # ==============================================================================
 def analisar_acao(ticker):
-    """
-    Analisa ação completa com cálculos manuais de DY e Payout
-    """
+    """Analisa ação completa com cálculos manuais de DY e Payout"""
     logger.info(f"🔍 Analisando: {ticker}")
     
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
         
-        # Preço atual
         preco_atual = info.get('currentPrice', info.get('regularMarketPrice', 0))
         
-        # Dividendos dos últimos 12 meses
+        # Dividendos últimos 12 meses
         dividendos = acao.dividends
         dividendos_12m = 0
         
@@ -184,23 +162,21 @@ def analisar_acao(ticker):
             um_ano_atras = hoje - timedelta(days=365)
             
             for data, valor in dividendos.items():
-                # Remove timezone
                 if hasattr(data, 'tzinfo') and data.tzinfo is not None:
                     data = data.replace(tzinfo=None)
                 
                 if data >= um_ano_atras:
                     dividendos_12m += valor
         
-        # Calcula Dividend Yield
+        # Calcula DY manualmente
         if preco_atual and preco_atual > 0:
             dividend_yield = dividendos_12m / preco_atual
         else:
             dividend_yield = 0
         
-        # Dividend Rate
         dividend_rate = dividendos_12m
         
-        # Payout Ratio
+        # Calcula Payout manualmente
         eps = info.get('trailingEps', 0)
         
         if eps and eps > 0:
@@ -208,7 +184,6 @@ def analisar_acao(ticker):
         else:
             payout_ratio = 0
         
-        # Limita payout a 100%
         payout_ratio = min(payout_ratio, 1.0)
         
         dados = {
@@ -261,16 +236,14 @@ def analisar_acao(ticker):
     except Exception as e:
         logger.error(f"❌ Erro {ticker}: {e}")
         return None
+
 # ==============================================================================
-# GERAR ALERTAS FUNDAMENTISTAS
+# ALERTAS
 # ==============================================================================
 def gerar_alertas(dados):
-    """
-    Gera alertas baseados em thresholds
-    """
+    """Gera alertas baseados em thresholds"""
     alertas = []
     
-    # 1. Dividend Yield alto
     if dados["dividend_yield"] and dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
         alertas.append({
             "tipo": "DY_ALTO",
@@ -278,7 +251,6 @@ def gerar_alertas(dados):
             "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
         })
     
-    # 2. Payout muito alto
     if dados["payout_ratio"] and dados["payout_ratio"] > THRESHOLDS["payout_max"]:
         alertas.append({
             "tipo": "PAYOUT_ALTO",
@@ -286,7 +258,6 @@ def gerar_alertas(dados):
             "mensagem": f"Payout: {dados['payout_ratio']:.1%} (máximo: {THRESHOLDS['payout_max']:.0%})\n⚠️ Risco de corte de dividendos"
         })
     
-    # 3. Upside significativo
     if dados["upside"] and dados["upside"] > THRESHOLDS["price_target_upside"]:
         alertas.append({
             "tipo": "UPSIDE",
@@ -294,7 +265,6 @@ def gerar_alertas(dados):
             "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
         })
     
-    # 4. Dividendo cortado
     for alerta in dados.get("alertas", []):
         if "Dividendo caiu" in alerta:
             alertas.append({
@@ -306,40 +276,96 @@ def gerar_alertas(dados):
     return alertas
 
 # ==============================================================================
-# FORMATAR MENSAGENS
+# FORMATAR TABELAS
 # ==============================================================================
-def formatar_resumo_diario(dados_lista):
-    """
-    Formata resumo diário de todos os ativos
-    """
-    msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n\n"
+def formatar_tabela_resumo(dados_lista):
+    """Formata resumo em tabela organizada"""
+    if not dados_lista:
+        return None
     
-    for dados in dados_lista:
-        if not dados:
-            continue
-        
+    hoje = datetime.now().strftime("%d/%m/%Y")
+    
+    msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n"
+    msg += f"{hoje}\n\n"
+    
+    # Tabela em código monoespaçado
+    msg += "```\n"
+    msg += "┌─────────┬──────────┬─────────┬──────────┬──────┬─────────┐\n"
+    msg += "│ Ativo   │ DY (12m) │ Payout  │ P/L      │ Ups. │ Status  │\n"
+    msg += "├─────────┼──────────┼─────────┼──────────┼──────┼─────────┤\n"
+    
+    for dados in sorted(dados_lista, key=lambda x: x.get('dividend_yield', 0), reverse=True):
         ticker = dados["ticker"]
-        nome = dados["nome"].split()[0]
+        nome = dados["nome"].split()[:8][0]
         
         dy = dados["dividend_yield"] or 0
         payout = dados["payout_ratio"] or 0
         pe = dados["pe_ratio"] or 0
         upside = dados["upside"] or 0
         
-        icone_dy = "🟢" if dy > 0.08 else "🟡" if dy > 0.06 else "🔴"
+        icone_dy = "🟢" if dy > 0.06 else "🟡" if dy > 0.04 else "🔴"
         icone_payout = "🟢" if payout < 0.60 else "🟡" if payout < 0.80 else "🔴"
         
-        msg += f"#{ticker} | {nome}\n"
-        msg += f"{icone_dy} DY: {dy:.2%} | "
-        msg += f"{icone_payout} Payout: {payout:.1%}\n"
-        msg += f"P/L: {pe:.2f} | Upside: {upside:.1%}\n\n"
+        if dy > 0.06 and upside > 0.15:
+            status = "🟢 Buy "
+        elif dy > 0.04 or upside > 0.05:
+            status = "🟡 Hold"
+        else:
+            status = "🔴 Sell"
+        
+        msg += f"│ {ticker:<7} │ {dy:>6.2%} {icone_dy} │ {payout:>6.1%} {icone_payout} │ {pe:>8.2f} │ {upside:>5.1%}│ {status} │\n"
+    
+    msg += "└─────────┴──────────┴─────────┴──────────┴──────┴─────────┘\n"
+    msg += "```\n\n"
+    
+    msg += "🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
+    msg += "🟢 Payout < 60%  |  🟡 60-80%  |  🔴 > 80%\n"
     
     return msg
 
-def formatar_alerta_dividendo(dados):
-    """
-    Formata alerta de dividendo (Data COM próxima)
-    """
+def formatar_tabela_data_com(dados_com):
+    """Formata tabela de Data COM próxima"""
+    if not dados_com:
+        return None
+    
+    msg = "💰 *DATA COM PRÓXIMA*\n\n"
+    
+    msg += "```\n"
+    msg += "┌─────────┬──────────────┬────────────┬──────────┬─────────┐\n"
+    msg += "│ Ativo   │ Data COM     │ Pagamento  │ Valor    │ DY      │\n"
+    msg += "├─────────┼──────────────┼────────────┼──────────┼─────────┤\n"
+    
+    for dados in sorted(dados_com, key=lambda x: x["dias_para_com"]):
+        ticker = dados["ticker"]
+        nome = dados["nome"].split()[:8][0]
+        data_com = dados["data_com"]
+        data_pag = dados["data_pagamento"]
+        valor = dados["dividend_rate"]
+        dy = dados["dividend_yield"]
+        
+        msg += f"│ {ticker:<7} │ {data_com:<12} │ {data_pag:<10} │ R$ {valor:>5.4f} │ {dy:>6.2%} │\n"
+    
+    msg += "└─────────┴──────────────┴────────────┴──────────┴─────────┘\n"
+    msg += "```\n"
+    
+    return msg
+
+# ==============================================================================
+# ALERTAS INDIVIDUAIS
+# ==============================================================================
+def formatar_alerta_fundamento(alerta, dados):
+    """Formata alerta individual de fundamento"""
+    ticker = dados["ticker"]
+    nome = dados["nome"].split()[0]
+    
+    msg = f"{alerta['titulo']}\n\n"
+    msg += f"#{ticker} | {nome}\n\n"
+    msg += f"{alerta['mensagem']}"
+    
+    return msg
+
+def formatar_alerta_data_com(dados):
+    """Formata alerta de Data COM próxima"""
     ticker = dados["ticker"]
     nome = dados["nome"].split()[0]
     
@@ -351,7 +377,6 @@ def formatar_alerta_dividendo(dados):
     hoje = datetime.now()
     dias_para_com = (data_com - hoje).days
     
-    # Só alerta se Data COM for nos próximos 15 dias
     if dias_para_com < 0 or dias_para_com > 15:
         return None
     
@@ -376,21 +401,6 @@ def formatar_alerta_dividendo(dados):
     
     return msg
 
-def formatar_alerta_fundamento(alerta, dados):
-    """
-    Formata alerta de fundamento
-    """
-    ticker = dados["ticker"]
-    nome = dados["nome"].split()[0]
-    
-    msg = (
-        f"#{ticker} | {nome}\n\n"
-        f"{alerta['titulo']}\n\n"
-        f"{alerta['mensagem']}"
-    )
-    
-    return msg
-
 # ==============================================================================
 # RADAR PRINCIPAL
 # ==============================================================================
@@ -403,6 +413,7 @@ def main():
     enviar_telegram(f"🤖 *Radar IDIV | {hoje}*\nIniciando monitoramento de {len(MEUS_PAPEIS)} ativos...")
     
     todos_dados = []
+    dados_data_com = []
     total_alertas = 0
     total_alertas_fundamentos = 0
     total_noticias = 0
@@ -410,17 +421,26 @@ def main():
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
         
-        # 1. Analisa ação completa
+        # 1. Analisa ação
         dados = analisar_acao(ticker)
         if not dados:
             continue
         
         todos_dados.append(dados)
         
-        # 2. Alerta de Data COM próxima
-        msg_com = formatar_alerta_dividendo(dados)
+        # 2. Alerta Data COM
+        msg_com = formatar_alerta_data_com(dados)
         if msg_com:
             enviar_telegram(msg_com)
+            dados_data_com.append({
+                "ticker": ticker,
+                "nome": dados["nome"],
+                "data_com": dados["ex_dividend_date"],
+                "data_pagamento": dados.get("ex_dividend_date", 0) + 15,
+                "dividend_rate": dados["dividend_rate"],
+                "dividend_yield": dados["dividend_yield"],
+                "dias_para_com": (datetime.fromtimestamp(dados["ex_dividend_date"]) - datetime.now()).days
+            })
             total_alertas += 1
             logger.info(f"✅ Alerta Data COM: {ticker}")
         
@@ -433,7 +453,7 @@ def main():
             total_alertas_fundamentos += 1
             logger.info(f"✅ Alerta fundamento: {ticker} | {alerta['tipo']}")
         
-        # 4. Notícias do Google News (se tiver alerta de fundamento)
+        # 4. Notícias (se tiver alerta)
         if alertas:
             noticias = buscar_noticias_google(ticker, dados["nome"])
             if noticias:
@@ -443,12 +463,19 @@ def main():
                     total_noticias += len(noticias)
                     logger.info(f"✅ Notícias: {ticker} | {len(noticias)} notícias")
     
-    # 5. Resumo diário
-    if todos_dados:
-        msg_resumo = formatar_resumo_diario(todos_dados)
-        enviar_telegram(msg_resumo)
+    # 5. Tabela de Data COM (se tiver)
+    if dados_data_com:
+        msg_tabela_com = formatar_tabela_data_com(dados_data_com)
+        if msg_tabela_com:
+            enviar_telegram(msg_tabela_com)
     
-    # 6. Mensagem final
+    # 6. Tabela Resumo (sempre envia)
+    if todos_dados:
+        msg_tabela = formatar_tabela_resumo(todos_dados)
+        if msg_tabela:
+            enviar_telegram(msg_tabela)
+    
+    # 7. Mensagem final
     msg_final = (
         f"✅ *Monitoramento Concluído!*\n\n"
         f"📊 Ativos analisados: {len(todos_dados)}\n"
