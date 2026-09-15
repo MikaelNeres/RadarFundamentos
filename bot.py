@@ -1,12 +1,11 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
-Fonte: Yahoo Finance + Google News RSS
-Versão: Tabelas Telegram (código monoespaçado)
+Fonte: Yahoo Finance
+Versão: Tabelas Telegram (sem notícias)
 """
 
 import yfinance as yf
 import requests
-import feedparser
 import re
 from datetime import datetime, timedelta
 import logging
@@ -71,71 +70,6 @@ def enviar_telegram(mensagem, disable_web_preview=False):
         logger.error(f"❌ Erro Telegram: {e}")
     
     return False
-
-# ==============================================================================
-# GOOGLE NEWS RSS
-# ==============================================================================
-def buscar_noticias_google(ticker, nome_empresa):
-    """Busca notícias no Google News RSS"""
-    logger.info(f"🔍 Buscando notícias Google: {ticker}")
-    
-    query = f"{ticker} OR {nome_empresa.split()} OR {nome_empresa} ação OR {nome_empresa} dividendos"[0]
-    url = f"https://news.google.com/rss/search?q={query}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-    
-    try:
-        feed = feedparser.parse(url)
-        
-        if not feed.entries:
-            return []
-        
-        noticias = []
-        for entry in feed.entries[:5]:
-            titulo = entry.title if hasattr(entry, 'title') else ''
-            link = entry.link if hasattr(entry, 'link') else ''
-            
-            publisher = "Google News"
-            if hasattr(entry, 'source') and entry.source:
-                publisher = entry.source
-            elif ' - ' in titulo:
-                parts = titulo.split(' - ')
-                if len(parts) > 1:
-                    publisher = parts[0]
-                    titulo = ' - '.join(parts[1:])
-            
-            if titulo and link:
-                noticias.append({
-                    'title': titulo,
-                    'link': link,
-                    'publisher': publisher
-                })
-        
-        logger.info(f"✅ {len(noticias)} notícias: {ticker}")
-        return noticias
-        
-    except Exception as e:
-        logger.error(f"❌ Erro Google News {ticker}: {e}")
-        return []
-
-def formatar_noticias_google(ticker, nome, noticias):
-    """Formata notícias do Google News"""
-    if not noticias:
-        return None
-    
-    msg = f"📰 *NOTÍCIAS - #{ticker} | {nome}*\n\n"
-    
-    for i, noticia in enumerate(noticias[:3], 1):
-        titulo = noticia['title']
-        link = noticia['link']
-        publisher = noticia['publisher']
-        
-        if len(titulo) > 100:
-            titulo = titulo[:97] + "..."
-        
-        msg += f"{i}. *{titulo}*\n"
-        msg += f"   📌 {publisher}\n"
-        msg += f"   🔗 [Ler mais]({link})\n\n"
-    
-    return msg
 
 # ==============================================================================
 # ANÁLISE DE AÇÕES
@@ -268,7 +202,7 @@ def gerar_alertas(dados):
     return alertas
 
 # ==============================================================================
-# TABELAS TELEGRAM (COM BACKTICKS)
+# TABELAS TELEGRAM
 # ==============================================================================
 def formatar_tabela_telegram(dados_lista):
     """Formata tabela para Telegram com código monoespaçado"""
@@ -279,7 +213,7 @@ def formatar_tabela_telegram(dados_lista):
     
     msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n"
     msg += f"{hoje}\n\n"
-    msg += "```\n"  # Abre código monoespaçado
+    msg += "```\n"
     
     msg += "Ativo   | DY (12m) | Payout  | P/L   | Ups.  | Status\n"
     msg += "--------|----------|---------|-------|-------|--------\n"
@@ -303,7 +237,7 @@ def formatar_tabela_telegram(dados_lista):
         
         msg += f"{ticker:<7} | {dy:>6.2%} {icone_dy} | {payout:>6.1%} {icone_payout} | {pe:>6.2f} | {upside:>5.1%} | {status}\n"
     
-    msg += "```\n\n"  # Fecha código monoespaçado
+    msg += "```\n\n"
     msg += "🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
     msg += "🟢 Payout < 60%  |  🟡 60-80%  |  🔴 > 80%\n"
     
@@ -420,7 +354,6 @@ def main():
     todos_dados = []
     dados_data_com = []
     alertas_gerais = []
-    total_noticias = 0
     
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
@@ -456,46 +389,36 @@ def main():
                 "tipo": alerta["tipo"],
                 "mensagem": alerta["mensagem"]
             })
-        
-        # 4. Notícias (se tiver alerta)
-        if alertas:
-            noticias = buscar_noticias_google(ticker, dados["nome"])
-            if noticias:
-                msg_noticias = formatar_noticias_google(ticker, dados["nome"].split(), noticias)[0]
-                if msg_noticias:
-                    enviar_telegram(msg_noticias, disable_web_preview=True)
-                    total_noticias += len(noticias)
     
-    # 5. Tabela Data COM
+    # 4. Tabela Data COM
     if dados_data_com:
         msg_com = formatar_data_com_telegram(dados_data_com)
         if msg_com:
             enviar_telegram(msg_com)
     
-    # 6. Tabela Alertas
+    # 5. Tabela Alertas
     if alertas_gerais:
         msg_alertas = formatar_alertas_telegram(alertas_gerais)
         if msg_alertas:
             enviar_telegram(msg_alertas)
     
-    # 7. Tabela Resumo
+    # 6. Tabela Resumo
     if todos_dados:
         msg_tabela = formatar_tabela_telegram(todos_dados)
         if msg_tabela:
             enviar_telegram(msg_tabela)
     
-    # 8. Mensagem final
+    # 7. Mensagem final
     msg_final = (
         f"✅ *Monitoramento Concluído!*\n\n"
         f"📊 Ativos analisados: {len(todos_dados)}\n"
         f"🔔 Alertas de dividendos: {len(dados_data_com)}\n"
         f"📈 Alertas de fundamentos: {len(alertas_gerais)}\n"
-        f"📰 Notícias enviadas: {total_noticias}\n"
         f"📣 Total: {len(dados_data_com) + len(alertas_gerais)} alertas"
     )
     enviar_telegram(msg_final)
     
-    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas | {total_noticias} notícias")
+    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas")
 
 # ==============================================================================
 # MAIN
