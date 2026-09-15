@@ -1,7 +1,7 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 Fonte: Yahoo Finance + Google News RSS
-Versão: Tabelas WhatsApp + Botões Inline Telegram
+Versão: Tabelas WhatsApp (copy-paste friendly)
 """
 
 import yfinance as yf
@@ -49,14 +49,11 @@ THRESHOLDS = {
 }
 
 # ==============================================================================
-# TELEGRAM COM BOTÕES
+# TELEGRAM
 # ==============================================================================
-def enviar_telegram_com_botao(mensagem, ticker=None, disable_web_preview=False):
-    """
-    Envia mensagem para Telegram com botão inline do ativo
-    """
+def enviar_telegram(mensagem, disable_web_preview=False):
+    """Envia mensagem para Telegram"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    
     payload = {
         "chat_id": CHAT_ID,
         "text": mensagem,
@@ -64,19 +61,10 @@ def enviar_telegram_com_botao(mensagem, ticker=None, disable_web_preview=False):
         "disable_web_page_preview": disable_web_preview
     }
     
-    # Adiciona botões inline se tiver ticker
-    if ticker:
-        payload["reply_markup"] = {
-            "inline_keyboard": [[
-                {"text": f"📊 {ticker}", "url": f"https://brapi.dev/quote/{ticker}"},
-                {"text": f"📈 TradingView", "url": f"https://br.tradingview.com/symbols/B3-{ticker}/"}
-            ]]
-        }
-    
     try:
         response = requests.post(url, json=payload, timeout=15)
         if response.status_code == 200:
-            logger.info(f"✅ Telegram enviado: {ticker or 'OK'}")
+            logger.info("✅ Telegram enviado")
             return True
         logger.warning(f"⚠️ Telegram status: {response.status_code}")
     except Exception as e:
@@ -280,17 +268,21 @@ def gerar_alertas(dados):
     return alertas
 
 # ==============================================================================
-# TABELAS WHATSAPP COM BOTÕES
+# TABELAS WHATSAPP
 # ==============================================================================
-def formatar_tabela_resumo_com_botoes(dados_lista):
-    """Formata tabela e envia com botões inline"""
+def formatar_tabela_resumo_whatsapp(dados_lista):
+    """Formata tabela simples para WhatsApp (copy-paste friendly)"""
     if not dados_lista:
         return None
     
     hoje = datetime.now().strftime("%d/%m/%Y")
     
-    # Agrupa por linha para enviar com botões
-    linhas = []
+    msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n"
+    msg += f"{hoje}\n\n"
+    
+    msg += "Ativo   | DY (12m) | Payout  | P/L   | Ups.  | Status\n"
+    msg += "--------|----------|---------|-------|-------|--------\n"
+    
     for dados in sorted(dados_lista, key=lambda x: x.get('dividend_yield', 0), reverse=True):
         ticker = dados["ticker"]
         dy = dados["dividend_yield"] or 0
@@ -308,49 +300,27 @@ def formatar_tabela_resumo_com_botoes(dados_lista):
         else:
             status = "🔴 Sell"
         
-        linha = f"{ticker:<7} | {dy:>6.2%} {icone_dy} | {payout:>6.1%} {icone_payout} | {pe:>6.2f} | {upside:>5.1%} | {status}"
-        linhas.append({
-            "texto": linha,
-            "ticker": ticker
-        })
+        msg += f"{ticker:<7} | {dy:>6.2%} {icone_dy} | {payout:>6.1%} {icone_payout} | {pe:>6.2f} | {upside:>5.1%} | {status}\n"
     
-    # Envia blocos de 5 linhas com botões
-    for i in range(0, len(linhas), 5):
-        bloco = linhas[i:i+5]
-        msg_bloco = ""
-        
-        if i == 0:
-            msg_bloco += f"📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n{hoje}\n\n"
-            msg_bloco += "Ativo   | DY (12m) | Payout  | P/L   | Ups.  | Status\n"
-            msg_bloco += "--------|----------|---------|-------|-------|--------\n"
-        
-        for linha in bloco:
-            msg_bloco += linha["texto"] + "\n"
-        
-        if i + 5 >= len(linhas):
-            msg_bloco += "\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
-            msg_bloco += "🟢 Payout < 60%  |  🟡 60-80%  |  🔴 > 80%\n"
-        
-        # Envia bloco com botões do primeiro ticker do bloco
-        ticker_botao = bloco[0]["ticker"] if bloco else None
-        enviar_telegram_com_botao(msg_bloco, ticker=ticker_botao)
+    msg += "\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
+    msg += "🟢 Payout < 60%  |  🟡 60-80%  |  🔴 > 80%\n"
     
-    return True
+    return msg
 
-def formatar_alertas_com_botoes(alertas_lista):
-    """Formata alertas e envia com botões inline"""
+def formatar_alertas_whatsapp(alertas_lista):
+    """Formata alertas em texto simples para WhatsApp"""
     if not alertas_lista:
         return None
     
-    # Agrupa por tipo
     dy_alto = [a for a in alertas_lista if a['tipo'] == 'DY_ALTO']
     payout_alto = [a for a in alertas_lista if a['tipo'] == 'PAYOUT_ALTO']
     upside = [a for a in alertas_lista if a['tipo'] == 'UPSIDE']
     corte_div = [a for a in alertas_lista if a['tipo'] == 'CORTE_DIVIDENDO']
     
-    # DY Alto
+    msg = ""
+    
     if dy_alto:
-        msg = "🟢 *DIVIDEND YIELD ATRAENTE* (>6%)\n\n"
+        msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%)\n\n"
         msg += "Ativo   | DY Atual | Threshold\n"
         msg += "--------|----------|----------\n"
         
@@ -360,11 +330,10 @@ def formatar_alertas_com_botoes(alertas_lista):
             dy = dy_match.group(1) if dy_match else 'N/A'
             msg += f"{ticker:<7} | {dy:<8} | > 6.00%\n"
         
-        enviar_telegram_com_botao(msg, ticker=dy_alto[0]['ticker'] if dy_alto else None)
+        msg += "\n"
     
-    # Payout Alto
     if payout_alto:
-        msg = "🟡 *PAYOUT ELEVADO* (>80%) - Risco de Corte\n\n"
+        msg += "🟡 *PAYOUT ELEVADO* (>80%) - Risco de Corte\n\n"
         msg += "Ativo   | Payout   | Threshold\n"
         msg += "--------|----------|----------\n"
         
@@ -374,11 +343,10 @@ def formatar_alertas_com_botoes(alertas_lista):
             payout = payout_match.group(1) if payout_match else 'N/A'
             msg += f"{ticker:<7} | {payout:<8} | > 80.0%\n"
         
-        enviar_telegram_com_botao(msg, ticker=payout_alto[0]['ticker'] if payout_alto else None)
+        msg += "\n"
     
-    # Upside
     if upside:
-        msg = "🟢 *UPSIDE POTENCIAL* (>20%)\n\n"
+        msg += "🟢 *UPSIDE POTENCIAL* (>20%)\n\n"
         msg += "Ativo   | Upside   | Alvo\n"
         msg += "--------|----------|----------\n"
         
@@ -392,11 +360,10 @@ def formatar_alertas_com_botoes(alertas_lista):
             
             msg += f"{ticker:<7} | {upside_val:<8} | R$ {alvo_val}\n"
         
-        enviar_telegram_com_botao(msg, ticker=upside[0]['ticker'] if upside else None)
+        msg += "\n"
     
-    # Corte Dividendo
     if corte_div:
-        msg = "🔴 *CORTE DE DIVIDENDO*\n\n"
+        msg += "🔴 *CORTE DE DIVIDENDO*\n\n"
         msg += "Ativo   | Variação  | Alerta\n"
         msg += "--------|-----------|----------------\n"
         
@@ -406,10 +373,12 @@ def formatar_alertas_com_botoes(alertas_lista):
             variacao = variacao_match.group(1) if variacao_match else 'N/A'
             msg += f"{ticker:<7} | {variacao:<9} | ⚠️ Risco\n"
         
-        enviar_telegram_com_botao(msg, ticker=corte_div[0]['ticker'] if corte_div else None)
+        msg += "\n"
+    
+    return msg
 
-def formatar_data_com_com_botoes(dados_com):
-    """Formata Data COM e envia com botões inline"""
+def formatar_data_com_whatsapp(dados_com):
+    """Formata Data COM próxima para WhatsApp"""
     if not dados_com:
         return None
     
@@ -426,7 +395,7 @@ def formatar_data_com_com_botoes(dados_com):
         
         msg += f"{ticker:<7} | {data_com:<10} | {dias:>5} | R$ {valor:>5.4f} | {dy:>6.2%}\n"
     
-    enviar_telegram_com_botao(msg, ticker=dados_com[0]['ticker'] if dados_com else None)
+    return msg
 
 # ==============================================================================
 # RADAR PRINCIPAL
@@ -437,10 +406,7 @@ def main():
     logger.info("="*60)
     
     hoje = datetime.now().strftime("%d/%m/%Y")
-    enviar_telegram_com_botao(
-        f"🤖 *Radar IDIV | {hoje}*\nIniciando monitoramento de {len(MEUS_PAPEIS)} ativos...",
-        ticker=MEUS_PAPEIS[0]["ticker"]
-    )
+    enviar_telegram(f"🤖 *Radar IDIV | {hoje}*\nIniciando monitoramento de {len(MEUS_PAPEIS)} ativos...")
     
     todos_dados = []
     dados_data_com = []
@@ -488,20 +454,26 @@ def main():
             if noticias:
                 msg_noticias = formatar_noticias_google(ticker, dados["nome"].split()[0], noticias)
                 if msg_noticias:
-                    enviar_telegram_com_botao(msg_noticias, ticker=ticker, disable_web_preview=True)
+                    enviar_telegram(msg_noticias, disable_web_preview=True)
                     total_noticias += len(noticias)
     
-    # 5. Tabela Data COM com botões
+    # 5. Tabela Data COM
     if dados_data_com:
-        formatar_data_com_com_botoes(dados_data_com)
+        msg_com = formatar_data_com_whatsapp(dados_data_com)
+        if msg_com:
+            enviar_telegram(msg_com)
     
-    # 6. Tabela Alertas com botões
+    # 6. Tabela Alertas
     if alertas_gerais:
-        formatar_alertas_com_botoes(alertas_gerais)
+        msg_alertas = formatar_alertas_whatsapp(alertas_gerais)
+        if msg_alertas:
+            enviar_telegram(msg_alertas)
     
-    # 7. Tabela Resumo com botões
+    # 7. Tabela Resumo
     if todos_dados:
-        formatar_tabela_resumo_com_botoes(todos_dados)
+        msg_tabela = formatar_tabela_resumo_whatsapp(todos_dados)
+        if msg_tabela:
+            enviar_telegram(msg_tabela)
     
     # 8. Mensagem final
     msg_final = (
@@ -512,7 +484,7 @@ def main():
         f"📰 Notícias enviadas: {total_noticias}\n"
         f"📣 Total: {len(dados_data_com) + len(alertas_gerais)} alertas"
     )
-    enviar_telegram_com_botao(msg_final)
+    enviar_telegram(msg_final)
     
     logger.info(f"✅ Fim: {len(alertas_gerais)} alertas | {total_noticias} notícias")
 
