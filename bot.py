@@ -1,6 +1,6 @@
 """
-🤖 RADAR IDIV v8.0 - Monitoramento Fundamentalista
-Foco: Dividendos, Data COM e Factor Investing
+🤖 RADAR IDIV v9.0 - Monitoramento Fundamentalista
+Foco: Dividendos, Data COM, Factor Investing + DY Projetado + MM200
 Fontes: Yahoo Finance
 """
 
@@ -46,9 +46,9 @@ MEUS_ATIVOS = [
 # ==============================================================================
 
 CONFIG_PADRAO = {
-    "p_l_justo": 8.0,      # P/L justo padrão
-    "p_vp_justo": 1.2,     # P/VP justo padrão
-    "dy_medio": 0.06       # Dividend Yield médio (6%)
+    "p_l_justo": 8.0,
+    "p_vp_justo": 1.2,
+    "dy_medio": 0.06
 }
 
 CONFIG_POR_TICKER = {
@@ -78,15 +78,7 @@ for ticker in MEUS_ATIVOS:
 # ==============================================================================
 
 def enviar_telegram(msg):
-    """
-    Envia mensagem para o Telegram
-    
-    Args:
-        msg (str): Mensagem em formato Markdown
-    
-    Returns:
-        bool: True se enviado com sucesso
-    """
+    """Envia mensagem para o Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         dados = {
@@ -106,20 +98,7 @@ def enviar_telegram(msg):
 # ==============================================================================
 
 def estimar_dividendo(ticker):
-    """
-    Estima o próximo dividendo baseado na média dos últimos 5 anos
-    
-    Estratégia:
-    1. Pega dividendos dos últimos 5 anos
-    2. Calcula payout médio (dividendo / LPA)
-    3. Projeta: LPA atual × Payout médio
-    
-    Args:
-        ticker (str): Código do ativo
-    
-    Returns:
-        tuple: (div_anual, payout, lpa, confianca, proximo_dividendo)
-    """
+    """Estima próximo dividendo baseado na média dos últimos 5 anos"""
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         dividendos = acao.dividends
@@ -127,11 +106,9 @@ def estimar_dividendo(ticker):
         if dividendos.empty:
             return 0, 0, 0, 0, 0
         
-        # Filtra últimos 5 anos
         hoje = datetime.now()
         cinco_anos = hoje - timedelta(days=5*365)
         
-        # Agrupa por ano
         div_por_ano = {}
         for data, valor in dividendos.items():
             if hasattr(data, 'tzinfo'):
@@ -140,22 +117,18 @@ def estimar_dividendo(ticker):
                 ano = data.year
                 div_por_ano[ano] = div_por_ano.get(ano, 0) + valor
         
-        # Pega LPA atual
         info = acao.info
         lpa = info.get('trailingEps', 0)
         
         if lpa <= 0:
             return 0, 0, 0, 0, 0
         
-        # Calcula payout médio
         payouts = [div / lpa for div in div_por_ano.values()]
         payout_medio = sum(payouts) / len(payouts) if payouts else 0.5
-        payout_medio = min(payout_medio, 1.0)  # Limita a 100%
+        payout_medio = min(payout_medio, 1.0)
         
-        # Projeta dividendo anual
         div_anual = lpa * payout_medio
         
-        # Calcula confiança (0 a 1)
         confianca = 0.5
         if lpa > 0:
             confianca += 0.2
@@ -165,7 +138,6 @@ def estimar_dividendo(ticker):
             confianca += 0.1
         confianca = min(confianca, 1.0)
         
-        # Estima frequência
         doze_meses = hoje - timedelta(days=365)
         pagamentos = sum(
             1 for d in dividendos.index
@@ -188,12 +160,7 @@ def estimar_dividendo(ticker):
 def analisar_ativo(ticker):
     """
     Analisa ativo e retorna dados fundamentalistas
-    
-    Args:
-        ticker (str): Código do ativo
-    
-    Returns:
-        dict: Dados fundamentalistas ou None
+    INCLUI: DY Projetado (LPA Forward × Payout 5a) + Média 200d
     """
     try:
         acao = yf.Ticker(f"{ticker}.SA")
@@ -202,7 +169,9 @@ def analisar_ativo(ticker):
         # Preço atual
         preco = info.get('currentPrice', info.get('regularMarketPrice', 0))
         
-        # Dividendos últimos 12 meses
+        # ==========================================================================
+        # DIVIDENDOS ATUAIS
+        # ==========================================================================
         dividendos = acao.dividends
         doze_meses = datetime.now() - timedelta(days=365)
         
@@ -211,13 +180,58 @@ def analisar_ativo(ticker):
             if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= doze_meses
         ) if not dividendos.empty else 0
         
-        # Dividend Yield
         dy = div_12m / preco if preco > 0 else 0
         
-        # Estimativa de dividendo futuro
-        div_anual, payout, lpa, confianca, proximo = estimar_dividendo(ticker)
+        # ==========================================================================
+        # DIVIDENDO PROJETADO (NOVO!)
+        # Fórmula: LPA Forward × Payout Médio 5 anos
+        # ==========================================================================
         
-        # LPA e Payout
+        lpa_forward = info.get('forwardEps', 0)
+        lpa_atual = info.get('trailingEps', 0)
+        
+        # Calcula payout médio 5 anos
+        if dividendos.empty or lpa_atual <= 0:
+            payout_medio_5a = 0
+        else:
+            cinco_anos = datetime.now() - timedelta(days=5*365)
+            div_por_ano = {}
+            
+            for data, valor in dividendos.items():
+                if hasattr(data, 'tzinfo'):
+                    data = data.replace(tzinfo=None)
+                if data >= cinco_anos:
+                    ano = data.year
+                    div_por_ano[ano] = div_por_ano.get(ano, 0) + valor
+            
+            payouts = [div / lpa_atual for div in div_por_ano.values()]
+            payout_medio_5a = sum(payouts) / len(payouts) if payouts else 0.5
+            payout_medio_5a = min(payout_medio_5a, 1.0)
+        
+        # Calcula dividendo projetado
+        if lpa_forward > 0 and payout_medio_5a > 0:
+            dividendo_projetado = lpa_forward * payout_medio_5a
+            dy_projetado = dividendo_projetado / preco if preco > 0 else 0
+        else:
+            dividendo_projetado = 0
+            dy_projetado = 0
+        
+        # ==========================================================================
+        # MÉDIA MÓVEL 200 DIAS (NOVO!)
+        # ==========================================================================
+        
+        media_200d = info.get('twoHundredDayAverage', 0)
+        
+        if media_200d > 0:
+            distancia_media_200d = (preco - media_200d) / media_200d
+        else:
+            distancia_media_200d = 0
+        
+        # ==========================================================================
+        # DADOS FUNDAMENTALISTAS
+        # ==========================================================================
+        
+        div_anual, payout, lpa, confianca, proximo = estimar_dividendo(ticker)
         eps = info.get('trailingEps', 0)
         payout_ratio = min(div_12m / eps, 1.0) if eps > 0 else 0
         
@@ -240,7 +254,15 @@ def analisar_ativo(ticker):
             "margem": info.get('profitMargins', 0),
             "divida_equity": info.get('debtToEquity', 0),
             "crescimento": info.get('revenueGrowth', 0),
-            "upside": (info.get('targetMeanPrice', 0) - preco) / preco if preco > 0 and info.get('targetMeanPrice', 0) > 0 else 0
+            "upside": (info.get('targetMeanPrice', 0) - preco) / preco if preco > 0 and info.get('targetMeanPrice', 0) > 0 else 0,
+            
+            # NOVOS CAMPOS
+            "lpa_forward": lpa_forward,
+            "payout_medio_5a": payout_medio_5a,
+            "dividendo_projetado": dividendo_projetado,
+            "dy_projetado": dy_projetado,
+            "media_200d": media_200d,
+            "distancia_media_200d": distancia_media_200d,
         }
     
     except Exception as e:
@@ -252,54 +274,24 @@ def analisar_ativo(ticker):
 # ==============================================================================
 
 def calcular_score(dados, historico, config):
-    """
-    Calcula score de Factor Investing (0-100)
+    """Calcula score de Factor Investing (0-100)"""
     
-    Fatores:
-    - Quality (30%): ROE, Payout, Margem, Dívida, Crescimento
-    - Low Vol (25%): Beta, Volatilidade, Drawdown
-    - Value (20%): P/L, P/VP, EV/EBITDA
-    - Dividend (15%): DY, Payout, Consistência
-    - Momentum (10%): Retorno 6m, Distância do topo
-    
-    Args:
-        dados (dict): Dados fundamentalistas
-        historico (DataFrame): Histórico 6 meses
-        config (dict): Configurações do ativo
-    
-    Returns:
-        dict: Score total e scores por fator
-    """
-    
-    # ==========================================================================
-    # QUALITY (30%)
-    # ==========================================================================
+    # Quality (30%)
     roe = dados.get("roe", 0)
     payout = dados.get("payout_ratio", 0)
     margem = dados.get("margem", 0)
     divida = dados.get("divida_equity", 0)
     cresc = dados.get("crescimento", 0)
     
-    # Score ROE
     score_roe = 100 if roe > 0.20 else 80 if roe > 0.15 else 60 if roe > 0.10 else 40 if roe > 0.05 else 20
-    
-    # Score Payout (ideal: 30-60%)
     score_payout = 100 if 0.30 <= payout <= 0.60 else 80 if 0.20 <= payout <= 0.70 else 60 if 0.10 <= payout <= 0.80 else 40
-    
-    # Score Margem
     score_margem = 100 if margem > 0.20 else 80 if margem > 0.15 else 60 if margem > 0.10 else 40 if margem > 0.05 else 20
-    
-    # Score Dívida (menor = melhor)
     score_divida = 100 if divida < 0.5 else 80 if divida < 1.0 else 60 if divida < 1.5 else 40 if divida < 2.0 else 20
-    
-    # Score Crescimento
     score_cresc = 100 if cresc > 0.15 else 80 if cresc > 0.10 else 60 if cresc > 0.05 else 40 if cresc > 0 else 20
     
     score_quality = score_roe * 0.30 + score_payout * 0.20 + score_margem * 0.20 + score_divida * 0.20 + score_cresc * 0.10
     
-    # ==========================================================================
-    # LOW VOL (25%)
-    # ==========================================================================
+    # Low Vol (25%)
     beta = dados.get("beta", 1.0)
     score_beta = 100 if beta < 0.8 else 80 if beta < 1.0 else 60 if beta < 1.2 else 40 if beta < 1.5 else 20
     
@@ -319,9 +311,7 @@ def calcular_score(dados, historico, config):
     
     score_low_vol = score_beta * 0.40 + score_vol * 0.30 + score_dd * 0.30
     
-    # ==========================================================================
-    # VALUE (20%)
-    # ==========================================================================
+    # Value (20%)
     pe = dados.get("pe_ratio", 0)
     pvp = dados.get("pb_ratio", 0)
     ev = dados.get("ev_ebitda", 0)
@@ -337,9 +327,7 @@ def calcular_score(dados, historico, config):
     
     score_value = score_pe * 0.40 + score_pvp * 0.30 + score_ev * 0.30
     
-    # ==========================================================================
-    # DIVIDEND (15%)
-    # ==========================================================================
+    # Dividend (15%)
     dy = dados.get("dividend_yield", 0)
     score_dy = 100 if dy > 0.10 else 80 if dy > 0.08 else 60 if dy > 0.06 else 40 if dy > 0.04 else 20
     
@@ -348,9 +336,7 @@ def calcular_score(dados, historico, config):
     
     score_dividend = score_dy * 0.50 + score_payout * 0.30 + score_consist * 0.20
     
-    # ==========================================================================
-    # MOMENTUM (10%)
-    # ==========================================================================
+    # Momentum (10%)
     try:
         ret = (historico['Close'].iloc[-1] - historico['Close'].iloc[0]) / historico['Close'].iloc[0] if len(historico) > 0 else 0
     except:
@@ -367,9 +353,7 @@ def calcular_score(dados, historico, config):
     
     score_momentum = score_ret * 0.60 + score_dist * 0.40
     
-    # ==========================================================================
-    # SCORE TOTAL
-    # ==========================================================================
+    # Score Total
     score_total = (
         score_quality * 0.30 +
         score_low_vol * 0.25 +
@@ -407,19 +391,10 @@ def calcular_score(dados, historico, config):
 # ==============================================================================
 
 def main():
-    """
-    Função principal do bot
-    
-    Fluxo:
-    1. Analisa todos os ativos
-    2. Verifica Data COM (próximos 15 dias)
-    3. Calcula score (mensal)
-    4. Alerta de DY (semanal)
-    5. Envia tabelas e resumo
-    """
+    """Função principal do bot"""
     
     logger.info("="*60)
-    logger.info(f"🤖 RADAR IDIV v8.0 - {len(MEUS_PAPEIS)} ativos")
+    logger.info(f"🤖 RADAR IDIV v9.0 - {len(MEUS_PAPEIS)} ativos")
     logger.info("="*60)
     
     # Envia mensagem de início
@@ -438,8 +413,8 @@ def main():
     hoje_semana = datetime.now().weekday()
     hoje_dia = datetime.now().day
     
-    e_segunda = hoje_semana == 0      # Segunda-feira
-    e_primeiro_dia = hoje_dia <= 3    # Primeiros 3 dias do mês
+    e_segunda = hoje_semana == 0
+    e_primeiro_dia = hoje_dia <= 3
     
     # ==========================================================================
     # LOOP PRINCIPAL
@@ -448,7 +423,6 @@ def main():
         ticker = papel["ticker"]
         logger.info(f"📊 Analisando {ticker}...")
         
-        # Analisa ativo
         dados = analisar_ativo(ticker)
         if not dados:
             logger.warning(f"⚠️ Sem dados para {ticker}")
@@ -458,9 +432,7 @@ def main():
         acao = yf.Ticker(f"{ticker}.SA")
         historico = acao.history(period="6mo")
         
-        # ----------------------------------------------------------------------
-        # DATA COM (próximos 15 dias)
-        # ----------------------------------------------------------------------
+        # Data COM
         if dados.get("proximo_dividendo", 0) > 0 and dados.get("ex_dividend_date"):
             data_com = datetime.fromtimestamp(dados["ex_dividend_date"])
             dias = (data_com - datetime.now()).days
@@ -472,9 +444,7 @@ def main():
                     "dias": dias
                 })
         
-        # ----------------------------------------------------------------------
-        # SCORE (mensal - primeiros 3 dias)
-        # ----------------------------------------------------------------------
+        # Score (mensal)
         if e_primeiro_dia:
             score = calcular_score(dados, historico, papel)
             dados["score"] = score
@@ -485,16 +455,13 @@ def main():
                     f"Score: {score['score_total']:.0f}/100 ({score['classificacao']})"
                 )
         
-        # ----------------------------------------------------------------------
-        # ALERTA DY (semanal - segundas)
-        # ----------------------------------------------------------------------
+        # Alerta DY (semanal)
         if e_segunda and dados["dividend_yield"] > 0.06:
             alertas.append(
                 f"🟢 *DY ATRAENTE - {ticker}*\n"
                 f"Dividend Yield: {dados['dividend_yield']:.2%}"
             )
         
-        # Adiciona à lista
         todos_dados.append(dados)
     
     # ==========================================================================
@@ -526,14 +493,14 @@ def main():
         enviar_telegram(alerta)
     
     # ==========================================================================
-    # ENVIA RESUMO DIÁRIO
+    # ENVIA RESUMO DIÁRIO (COM DY PROJETADO + MM200)
     # ==========================================================================
     if todos_dados:
         msg = "📊 *RESUMO DIÁRIO*\n"
         msg += hoje + "\n\n"
         msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'P/L':<6} | {'P/VP':<6} | {'Status':<7}\n"
-        msg += f"{'-'*47}\n"
+        msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'DY*':<7} | {'MM200':<8} | {'P/L':<6} | {'Status':<7}\n"
+        msg += f"{'-'*60}\n"
         
         for d in sorted(todos_dados, key=lambda x: x.get('dividend_yield', 0), reverse=True):
             # Ícone DY
@@ -544,10 +511,31 @@ def main():
             else:
                 icone = "🔴"
             
+            # Distância da média 200d
+            distancia = d.get('distancia_media_200d', 0)
+            if distancia > 0.20:
+                mm200 = f"+{distancia:.1%} 🔴"
+            elif distancia > 0:
+                mm200 = f"+{distancia:.1%} 🟡"
+            elif distancia > -0.20:
+                mm200 = f"{distancia:.1%} 🟡"
+            else:
+                mm200 = f"{distancia:.1%} 🟢"
+            
+            # Dividendo projetado
+            dy_projetado = d.get('dy_projetado', 0)
+            if dy_projetado > 0:
+                dy_proj_str = f"{dy_projetado:.1%}"
+            else:
+                dy_proj_str = "N/A"
+            
             # Status
-            if d['dividend_yield'] > 0.06 and d['pe_ratio'] < 8:
+            dy = d['dividend_yield']
+            pe = d['pe_ratio']
+            
+            if dy > 0.06 and pe < 8 and distancia < 0:
                 status = "🟢 Buy"
-            elif d['dividend_yield'] > 0.04:
+            elif dy > 0.04:
                 status = "🟡 Hold"
             else:
                 status = "🔴 Sell"
@@ -556,13 +544,16 @@ def main():
                 f"{d['ticker']:<7} | "
                 f"R$ {d['preco']:>5.2f} | "
                 f"{d['dividend_yield']:>6.1%} {icone} | "
+                f"{dy_proj_str:>6} | "
+                f"{mm200:<8} | "
                 f"{d['pe_ratio']:>5.2f} | "
-                f"{d['pb_ratio']:>5.2f} | "
                 f"{status:<7}\n"
             )
         
         msg += "```\n"
         msg += "\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
+        msg += "\nDY* = Dividendo Projetado (LPA Forward × Payout 5a)"
+        msg += "\nMM200 = Distância da Média Móvel 200 dias"
         enviar_telegram(msg)
     
     # ==========================================================================
