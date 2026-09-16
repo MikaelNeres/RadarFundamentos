@@ -1,19 +1,14 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 =====================================================
-Fonte: Yahoo Finance + StatusInvest (Insiders)
-Versão: Factor Investing + Payout × LPA (Média 5 Anos) + Insiders
+Fonte: Yahoo Finance + StatusInvest
+Versão: Factor Investing + Payout × LPA + Insiders + Recompras Automáticas
 
 Novidades:
-- Rastreio de insiders (compras/vendas de executivos)
-- Fallback manual via CSV
-- Alertas de insider trading
-
-Como usar:
-1. Edite MEUS_ATIVOS para adicionar/remover ações
-2. Atualize insiders_manual.csv se necessário (2-3 min/semana)
-3. Commit no GitHub
-4. Receba alertas no Telegram (automático)
+- Rastreio de insiders (StatusInvest + fallback CSV)
+- Detecção automática de recompras (variação de shares)
+- 100% automático (sem CSV manual para recompras)
+- Alertas automáticos no Telegram
 """
 
 # ==============================================================================
@@ -40,7 +35,7 @@ TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
 CHAT_ID = '566929604'
 
 # ==============================================================================
-# 📋 LISTA DE ATIVOS (30 TICKERS)
+# 📋 LISTA DE ATIVOS (31 TICKERS)
 # ==============================================================================
 MEUS_ATIVOS = [
     "CMIG4", "BBAS3", "SAPR11", "ISAE4", "ABCB4",
@@ -136,17 +131,8 @@ def estimar_dividendo_por_payout(ticker):
                 dividendos_por_ano[ano] += valor
         
         lpa_por_ano = {}
-        try:
-            financials = acao.financials
-            if financials is not None and not financials.empty:
-                for ano in dividendos_por_ano.keys():
-                    lpa_por_ano[ano] = lpa_atual
-            else:
-                for ano in dividendos_por_ano.keys():
-                    lpa_por_ano[ano] = lpa_atual
-        except:
-            for ano in dividendos_por_ano.keys():
-                lpa_por_ano[ano] = lpa_atual
+        for ano in dividendos_por_ano.keys():
+            lpa_por_ano[ano] = lpa_atual
         
         payouts_anuais = []
         lpa_usados = []
@@ -193,7 +179,7 @@ def estimar_dividendo_por_payout(ticker):
         return 0, 0, 0, 0, 0
 
 # ==============================================================================
-# INSIDER TRADING (StatusInvest + Fallback)
+# INSIDER TRADING
 # ==============================================================================
 def buscar_insiders_statusinvest(ticker):
     """Busca movimentação de insiders na StatusInvest"""
@@ -236,7 +222,7 @@ def buscar_insiders_statusinvest(ticker):
         return None
 
 def carregar_insiders_manual():
-    """Carrega insiders de arquivo CSV (fallback manual)"""
+    """Carrega insiders de arquivo CSV"""
     try:
         df = pd.read_csv('insiders_manual.csv')
         return df.to_dict('records')
@@ -272,7 +258,7 @@ def buscar_insiders_completo(ticker):
         salvar_insiders_manual(insiders)
         return insiders
     
-    logger.warning(f"⚠️ {ticker}: StatusInvest falhou, usando fallback manual")
+    logger.warning(f"⚠️ {ticker}: StatusInvest falhou, usando fallback")
     
     todos = carregar_insiders_manual()
     insiders_ticker = [m for m in todos if m.get('ticker') == ticker]
@@ -348,6 +334,145 @@ def formatar_alerta_insider(ticker, movimentacoes):
         sinal = "🟡 Neutro"
     
     msg += f"\n📊 Sinal: {sinal}"
+    
+    return msg
+
+# ==============================================================================
+# RECOMPRAS AUTOMÁTICAS (POR VARIAÇÃO DE SHARES)
+# ==============================================================================
+def detectar_recompra_por_shares(ticker):
+    """
+    Detecta recompra pela variação de shares outstanding
+    
+    Metodologia:
+    1. Pega shares atuais
+    2. Compara com histórico (balanços trimestrais)
+    3. Se reduziu > 2%, provavelmente tem recompra
+    """
+    try:
+        acao = yf.Ticker(f"{ticker}.SA")
+        info = acao.info
+        
+        # Shares atuais
+        shares_atual = info.get('sharesOutstanding', 0)
+        
+        if shares_atual <= 0:
+            logger.warning(f"⚠️ {ticker}: Shares inválidos")
+            return None
+        
+        # Tenta pegar histórico de shares (balanços trimestrais)
+        try:
+            financials = acao.quarterly_balance_sheet
+            
+            if financials is not None and not financials.empty:
+                # Pega últimas 2 colunas (trimestres)
+                if len(financials.columns) >= 2:
+                    # Tenta encontrar "Common Stock" ou "Capital Stock"
+                    shares_historico = None
+                    
+                    for idx in financials.index:
+                        if 'Common Stock' in idx or 'Capital Stock' in idx or 'Share Capital' in idx:
+                            shares_historico = financials.loc[idx]
+                            break
+                    
+                    if shares_historico is not None and len(shares_historico) >= 2:
+                        shares_antigo = shares_historico.iloc[-1]  # Trimestre mais antigo
+                        shares_novo = shares_historico.iloc[0]     # Trimestre mais recente
+                        
+                        # Calcula variação
+                        if shares_antigo > 0:
+                            variacao = (shares_novo - shares_antigo) / shares_antigo
+                            
+                            # Detecta recompra (redução > 2%)
+                            if variacao < -0.02:
+                                confianca = 'Alta' if variacao < -0.05 else 'Média'
+                                return {
+                                    'ticker': ticker,
+                                    'status': 'Provável Recompra',
+                                    'shares_atual': shares_atual,
+                                    'shares_antigo': shares_antigo,
+                                    'variacao': variacao,
+                                    'confianca': confianca,
+                                    'fonte': 'Yahoo Finance (Balance Sheet)'
+                                }
+                            
+                            # Detecta emissão (aumento > 2%)
+                            elif variacao > 0.02:
+                                confianca = 'Alta' if variacao > 0.05 else 'Média'
+                                return {
+                                    'ticker': ticker,
+                                    'status': 'Provável Emissão',
+                                    'shares_atual': shares_atual,
+                                    'shares_antigo': shares_antigo,
+                                    'variacao': variacao,
+                                    'confianca': confianca,
+                                    'fonte': 'Yahoo Finance (Balance Sheet)'
+                                }
+        except Exception as e:
+            logger.warning(f"⚠️ {ticker}: Erro ao analisar histórico: {e}")
+        
+        # Fallback: usa proxy (P/VP < 1 + caixa alto = possível recompra)
+        p_vp = info.get('priceToBook', 0)
+        total_cash = info.get('totalCash', 0)
+        market_cap = info.get('marketCap', 0)
+        
+        if p_vp > 0 and p_vp < 1.0 and total_cash > 0 and market_cap > 0:
+            if total_cash > market_cap * 0.15:
+                return {
+                    'ticker': ticker,
+                    'status': 'Possível Recompra (Indireto)',
+                    'motivo': 'P/VP < 1 e caixa alto (>15% market cap)',
+                    'confianca': 'Baixa',
+                    'fonte': 'Yahoo Finance (Indicadores)'
+                }
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Erro detectar recompra {ticker}: {e}")
+        return None
+
+def buscar_recompras_automatizado(ticker):
+    """Busca recompras de forma 100% automatizada"""
+    logger.info(f"🔍 Buscando recompras automáticas: {ticker}")
+    
+    recompra = detectar_recompra_por_shares(ticker)
+    
+    if recompra:
+        logger.info(f"✅ {ticker}: {recompra['status']} detectado")
+        return [recompra]
+    
+    logger.info(f"ℹ️ {ticker}: Sem indícios de recompra")
+    return []
+
+def formatar_alerta_recompra_auto(ticker, recompras):
+    """Formata alerta de recompra automática"""
+    if not recompras:
+        return None
+    
+    msg = f"🔁 *RECOMPRA DETECTADA - {ticker}*\n\n"
+    
+    for r in recompras:
+        msg += "```\n"
+        msg += f"Status:    {r.get('status', 'N/A')}\n"
+        
+        if 'variacao' in r:
+            msg += f"Variação:  {r['variacao']:.1%}\n"
+            msg += f"Shares:    {r['shares_antigo']/1e9:.2f}B → {r['shares_atual']/1e9:.2f}B\n"
+        
+        if 'motivo' in r:
+            msg += f"Motivo:    {r['motivo']}\n"
+        
+        msg += f"Confiança: {r.get('confianca', 'N/A')}\n"
+        msg += f"Fonte:     {r.get('fonte', 'N/A')}\n"
+        msg += "```\n"
+    
+    if any(r.get('confianca') == 'Alta' for r in recompras):
+        msg += "\n🟢 Recompras reduzem shares e aumentam LPA futuro!"
+    elif any('Emissão' in r.get('status', '') for r in recompras):
+        msg += "\n🔴 Emissões diluem acionistas (atenção!)"
+    else:
+        msg += "\n🟡 Indícios de recompra (confirmar em RI)"
     
     return msg
 
@@ -831,6 +956,7 @@ def main():
     alertas_gerais = []
     dados_factors_detalhado = []
     alertas_insider = []
+    alertas_recompra = []
     
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
@@ -848,7 +974,7 @@ def main():
         todos_dados.append(dados)
         
         # ======================================================================
-        # NOVO: INSIDER TRADING
+        # INSIDER TRADING
         # ======================================================================
         insiders = buscar_insiders_completo(ticker)
         insiders_relevantes = filtrar_insiders_relevantes(insiders, dias=30)
@@ -857,6 +983,16 @@ def main():
             msg = formatar_alerta_insider(ticker, insiders_relevantes)
             if msg:
                 alertas_insider.append(msg)
+        
+        # ======================================================================
+        # RECOMPRAS AUTOMÁTICAS (100% Yahoo Finance)
+        # ======================================================================
+        recompras = buscar_recompras_automatizado(ticker)
+        
+        if recompras:
+            msg = formatar_alerta_recompra_auto(ticker, recompras)
+            if msg:
+                alertas_recompra.append(msg)
         
         # Data COM
         if dados.get("proximo_dividendo", 0) > 0 and dados.get("ex_dividend_date"):
@@ -884,8 +1020,12 @@ def main():
         msg = formatar_data_com_telegram(dados_data_com)
         if msg: enviar_telegram(msg)
     
-    # Alertas Insider (NOVO!)
+    # Alertas Insider
     for msg in alertas_insider:
+        enviar_telegram(msg)
+    
+    # Alertas Recompra
+    for msg in alertas_recompra:
         enviar_telegram(msg)
     
     # Alertas
@@ -909,12 +1049,13 @@ def main():
         f"📊 Ativos analisados: {len(todos_dados)}\n"
         f"💰 Alertas Data COM: {len(dados_data_com)}\n"
         f"🔍 Alertas Insider: {len(alertas_insider)}\n"
+        f"🔁 Alertas Recompra: {len(alertas_recompra)}\n"
         f"📈 Alertas: {len(alertas_gerais)}\n"
         f"📅 Rotinas: Diária ✅ | Semanal {'✅' if rotinas['semanal'] else '❌'} | Mensal {'✅' if rotinas['mensal'] else '❌'}"
     )
     enviar_telegram(msg_final)
     
-    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas + {len(alertas_insider)} insiders")
+    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas + {len(alertas_insider)} insiders + {len(alertas_recompra)} recompras")
 
 # ==============================================================================
 # MAIN
