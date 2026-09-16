@@ -1,1064 +1,257 @@
 """
-🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
-=====================================================
+🤖 RADAR IDIV v5.0 - Monitoramento Fundamentalista
 Fonte: Yahoo Finance + StatusInvest
-Versão: Factor Investing + Payout × LPA + Insiders + Recompras Automáticas
-
-Novidades:
-- Rastreio de insiders (StatusInvest + fallback CSV)
-- Detecção automática de recompras (variação de shares)
-- 100% automático (sem CSV manual para recompras)
-- Alertas automáticos no Telegram
 """
 
-# ==============================================================================
-# IMPORTS E CONFIGURAÇÕES
-# ==============================================================================
-import yfinance as yf
-import requests
-import re
+import yfinance as yf, requests, re, logging, pandas as pd, numpy as np
 from datetime import datetime, timedelta
-import logging
-import pandas as pd
-import numpy as np
 
-# Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger(__name__)
 
-# Telegram
-TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
-CHAT_ID = '566929604'
+TOKEN, CHAT_ID = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE', '566929604'
+HISTORICO_SHARES = {}
 
-# ==============================================================================
-# 📋 LISTA DE ATIVOS (31 TICKERS)
-# ==============================================================================
-MEUS_ATIVOS = [
-    "CMIG4", "BBAS3", "SAPR11", "ISAE4", "ABCB4",
-    "LOGG3", "FIQE3", "GGBR4", "VBBR3", "SAUD3",
-    "DEXP3", "ITSA4", "PETR4", "BBSE3", "ITUB4",
-    "BBDC4", "CPLE3", "VALE3", "CSMG3", "TIMS3",
-    "VIVT3", "CXSE3", "KLBN11", "TAEE11", "EGIE3",
-    "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3",
-]
+MEUS_ATIVOS = ["CMIG4", "BBAS3", "SAPR11", "ISAE4", "ABCB4", "LOGG3", "FIQE3", "GGBR4", "VBBR3", "SAUD3", "DEXP3", "ITSA4", "PETR4", "BBSE3", "ITUB4", "BBDC4", "CPLE3", "VALE3", "CSMG3", "TIMS3", "VIVT3", "CXSE3", "KLBN11", "TAEE11", "EGIE3", "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3"]
 
-# Configurações padrão
-CONFIG_PADRAO = {
-    "p_l_justo": 8.0,
-    "p_vp_justo": 1.2,
-    "dy_medio": 0.06,
-}
+CONFIG_PADRAO = {"p_l_justo": 8.0, "p_vp_justo": 1.2, "dy_medio": 0.06}
+CONFIG_POR_TICKER = {"BBAS3": {"p_l_justo": 6.0, "p_vp_justo": 1.0, "dy_medio": 0.08}, "ABCB4": {"p_l_justo": 5.0, "p_vp_justo": 0.9, "dy_medio": 0.09}, "VBBR3": {"p_l_justo": 7.0, "p_vp_justo": 1.5, "dy_medio": 0.09}, "PETR4": {"p_l_justo": 5.0, "p_vp_justo": 1.0, "dy_medio": 0.10}, "VALE3": {"p_l_justo": 6.0, "p_vp_justo": 1.1, "dy_medio": 0.09}, "ITUB4": {"p_l_justo": 9.0, "p_vp_justo": 1.5, "dy_medio": 0.07}, "BBDC4": {"p_l_justo": 7.0, "p_vp_justo": 1.2, "dy_medio": 0.08}}
 
-# Personalizações por ticker
-CONFIG_POR_TICKER = {
-    "BBAS3": {"p_l_justo": 6.0, "p_vp_justo": 1.0, "dy_medio": 0.08},
-    "ABCB4": {"p_l_justo": 5.0, "p_vp_justo": 0.9, "dy_medio": 0.09},
-    "VBBR3": {"p_l_justo": 7.0, "p_vp_justo": 1.5, "dy_medio": 0.09},
-    "PETR4": {"p_l_justo": 5.0, "p_vp_justo": 1.0, "dy_medio": 0.10},
-    "VALE3": {"p_l_justo": 6.0, "p_vp_justo": 1.1, "dy_medio": 0.09},
-    "ITUB4": {"p_l_justo": 9.0, "p_vp_justo": 1.5, "dy_medio": 0.07},
-    "BBDC4": {"p_l_justo": 7.0, "p_vp_justo": 1.2, "dy_medio": 0.08},
-}
+MEUS_PAPEIS = [{"ticker": t, "nome": t, **{**CONFIG_PADRAO, **CONFIG_POR_TICKER.get(t, {})}} for t in MEUS_ATIVOS]
+THRESHOLDS = {"dividend_yield_min": 0.06, "price_target_upside": 0.20, "dividend_cut": -0.20, "margem_seguranca_min": 0.20}
+PESOS_FATORES = {"quality": 0.30, "low_vol": 0.25, "value": 0.20, "dividend": 0.15, "momentum": 0.10}
 
-def carregar_meus_papeis():
-    """Carrega lista de ativos"""
-    meus_papeis = []
-    for ticker in MEUS_ATIVOS:
-        config = CONFIG_PADRAO.copy()
-        if ticker in CONFIG_POR_TICKER:
-            config.update(CONFIG_POR_TICKER[ticker])
-        meus_papeis.append({
-            "ticker": ticker,
-            "nome": ticker,
-            "p_l_justo": config["p_l_justo"],
-            "p_vp_justo": config["p_vp_justo"],
-            "dy_medio": config["dy_medio"],
-        })
-    logger.info(f"📋 {len(meus_papeis)} ativos carregados: {', '.join(MEUS_ATIVOS)}")
-    return meus_papeis
+def enviar_telegram(msg):
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=15)
+        return r.status_code == 200
+    except: return False
 
-MEUS_PAPEIS = carregar_meus_papeis()
-
-# Thresholds
-THRESHOLDS = {
-    "dividend_yield_min": 0.06,
-    "price_target_upside": 0.20,
-    "dividend_cut": -0.20,
-    "margem_seguranca_min": 0.20,
-}
-
-# Pesos dos fatores
-PESOS_FATORES = {
-    "quality": 0.30,
-    "low_vol": 0.25,
-    "value": 0.20,
-    "dividend": 0.15,
-    "momentum": 0.10,
-}
-
-# ==============================================================================
-# ESTIMATIVA DE DIVIDENDO (MÉDIA 5 ANOS)
-# ==============================================================================
-def estimar_dividendo_por_payout(ticker):
-    """Estima dividendo usando média de 5 anos"""
+def estimar_dividendo(ticker):
     try:
         acao = yf.Ticker(f"{ticker}.SA")
-        info = acao.info
-        
-        lpa_atual = info.get('trailingEps', 0)
-        if not lpa_atual or lpa_atual <= 0:
-            return 0, 0, 0, 0, 0
-        
-        dividendos = acao.dividends
-        if dividendos.empty:
-            return 0, 0, 0, 0, 0
-        
-        hoje = datetime.now()
-        cinco_anos_atras = hoje - timedelta(days=5*365)
-        
-        dividendos_por_ano = {}
-        for data, valor in dividendos.items():
-            if hasattr(data, 'tzinfo') and data.tzinfo is not None:
-                data = data.replace(tzinfo=None)
-            if data >= cinco_anos_atras:
-                ano = data.year
-                if ano not in dividendos_por_ano:
-                    dividendos_por_ano[ano] = 0
-                dividendos_por_ano[ano] += valor
-        
-        lpa_por_ano = {}
-        for ano in dividendos_por_ano.keys():
-            lpa_por_ano[ano] = lpa_atual
-        
-        payouts_anuais = []
-        lpa_usados = []
-        
-        for ano, div_total in dividendos_por_ano.items():
-            lpa_ano = lpa_por_ano.get(ano, lpa_atual)
-            if lpa_ano > 0:
-                payout_ano = div_total / lpa_ano
-                payout_ano = min(payout_ano, 1.0)
-                payouts_anuais.append(payout_ano)
-                lpa_usados.append(lpa_ano)
-        
-        if len(payouts_anuais) > 0 and len(lpa_usados) > 0:
-            lpa_medio_5a = sum(lpa_usados) / len(lpa_usados)
-            payout_medio_5a = sum(payouts_anuais) / len(payouts_anuais)
-        else:
-            lpa_medio_5a = lpa_atual
-            payout_medio_5a = 0.50
-        
-        div_anual_esperado = lpa_medio_5a * payout_medio_5a
-        
-        um_ano_atras = hoje - timedelta(days=365)
-        count = sum(1 for d in dividendos.index if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= um_ano_atras)
-        
-        frequencia = 4 if count >= 4 else 2 if count >= 2 else 1
-        proximo_dividendo = div_anual_esperado / frequencia
-        
-        confianca = 0.5
-        if lpa_medio_5a > 0: confianca += 0.2
-        if len(payouts_anuais) >= 3:
-            variacao = max(payouts_anuais) - min(payouts_anuais)
-            if variacao < 0.20: confianca += 0.2
-            elif variacao < 0.30: confianca += 0.1
-        if 0.30 <= payout_medio_5a <= 0.80: confianca += 0.2
-        elif 0.20 <= payout_medio_5a <= 0.90: confianca += 0.1
-        if len(dividendos) >= 20: confianca += 0.1
-        confianca = min(confianca, 1.0)
-        
-        logger.info(f"📊 {ticker}: LPA Méd R$ {lpa_medio_5a:.2f} | Payout Méd {payout_medio_5a:.1%} | Est. R$ {proximo_dividendo:.4f} ({confianca:.0%})")
-        
-        return div_anual_esperado, payout_medio_5a, lpa_medio_5a, confianca, proximo_dividendo
-    except Exception as e:
-        logger.error(f"❌ Erro estimar {ticker}: {e}")
-        return 0, 0, 0, 0, 0
+        divs = acao.dividends
+        if divs.empty: return 0, 0, 0, 0, 0
+        hoje, cinco_anos = datetime.now(), datetime.now() - timedelta(days=5*365)
+        div_por_ano = {}
+        for d, v in divs.items():
+            if hasattr(d, 'tzinfo'): d = d.replace(tzinfo=None)
+            if d >= cinco_anos: div_por_ano[d.year] = div_por_ano.get(d.year, 0) + v
+        lpa = acao.info.get('trailingEps', 0)
+        if lpa <= 0: return 0, 0, 0, 0, 0
+        payouts = [div_por_ano[ano]/lpa for ano in div_por_ano if lpa > 0]
+        lpa_med, payout_med = sum([lpa]*len(payouts))/len(payouts) if payouts else lpa, sum(payouts)/len(payouts) if payouts else 0.5
+        div_anual = lpa_med * payout_med
+        count = sum(1 for d in divs.index if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= hoje - timedelta(days=365))
+        freq = 4 if count >= 4 else 2 if count >= 2 else 1
+        return div_anual, min(payout_med, 1.0), lpa_med, min(0.5 + (0.2 if lpa_med > 0 else 0) + (0.2 if 0.3 <= payout_med <= 0.8 else 0) + (0.1 if len(divs) >= 20 else 0), 1.0), div_anual / freq
+    except: return 0, 0, 0, 0, 0
 
-# ==============================================================================
-# INSIDER TRADING
-# ==============================================================================
-def buscar_insiders_statusinvest(ticker):
-    """Busca movimentação de insiders na StatusInvest"""
+def buscar_insiders(ticker):
     try:
         from bs4 import BeautifulSoup
-        
-        url = f"https://statusinvest.com.br/acao/{ticker}/insiders"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
+        r = requests.get(f"https://statusinvest.com.br/acao/{ticker}/insiders", headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            movs = []
             tabela = soup.find('table', {'class': 'table'})
-            
-            movimentacoes = []
             if tabela:
                 for row in tabela.find_all('tr')[1:]:
                     cols = row.find_all('td')
                     if len(cols) >= 5:
-                        try:
-                            movimentacoes.append({
-                                'nome': cols[0].text.strip(),
-                                'cargo': cols[1].text.strip(),
-                                'tipo': cols[2].text.strip(),
-                                'quantidade': int(cols[3].text.strip().replace('.', '').replace(',', '')),
-                                'data': cols[4].text.strip()
-                            })
-                        except:
-                            continue
-            
-            logger.info(f"📊 {ticker}: {len(movimentacoes)} movimentações encontradas")
-            return movimentacoes
-        else:
-            logger.warning(f"⚠️ {ticker}: StatusInvest retornou {response.status_code}")
-            return None
-            
-    except Exception as e:
-        logger.warning(f"⚠️ {ticker}: Erro buscar insiders StatusInvest: {e}")
-        return None
+                        try: movs.append({'nome': cols[0].text.strip()[:20], 'cargo': cols[1].text.strip()[:15], 'tipo': cols[2].text.strip()[:6], 'quantidade': int(cols[3].text.strip().replace('.', '').replace(',', '')), 'data': cols[4].text.strip()[:10]})
+                        except: pass
+            return movs if movs else None
+    except: pass
+    return None
 
-def carregar_insiders_manual():
-    """Carrega insiders de arquivo CSV"""
+def carregar_insiders_csv():
+    try: return pd.read_csv('insiders_manual.csv').to_dict('records')
+    except: return []
+
+def salvar_insiders_csv(movs, ticker):
     try:
-        df = pd.read_csv('insiders_manual.csv')
-        return df.to_dict('records')
-    except FileNotFoundError:
-        logger.warning("⚠️ Arquivo insiders_manual.csv não encontrado")
-        return []
-    except Exception as e:
-        logger.error(f"❌ Erro carregar insiders manual: {e}")
-        return []
+        existentes = carregar_insiders_csv()
+        todas = existentes + [{'ticker': ticker, **m} for m in movs]
+        pd.DataFrame(todas).drop_duplicates(subset=['ticker', 'nome', 'data'], keep='last').to_csv('insiders_manual.csv', index=False)
+    except: pass
 
-def salvar_insiders_manual(movimentacoes):
-    """Salva movimentações em CSV"""
-    try:
-        existentes = carregar_insiders_manual()
-        todas = existentes + movimentacoes
-        
-        df = pd.DataFrame(todas)
-        df = df.drop_duplicates(subset=['ticker', 'nome', 'data'], keep='last')
-        df.to_csv('insiders_manual.csv', index=False)
-        logger.info(f"✅ {len(movimentacoes)} movimentações salvas")
-    except Exception as e:
-        logger.error(f"❌ Erro salvar insiders manual: {e}")
+def filtrar_insiders(movs, dias=30):
+    if not movs: return []
+    limite = datetime.now() - timedelta(days=dias)
+    return [m for m in movs if m.get('data') and any(datetime.strptime(m['data'], f) >= limite for f in ['%d/%m/%Y', '%Y-%m-%d', '%d/%m/%y'] if m['data'] and len(m['data']) >= 10) and ('Compra' in m.get('tipo', '') or ('Venda' in m.get('tipo', '') and m.get('quantidade', 0) > 10000))]
 
-def buscar_insiders_completo(ticker):
-    """Busca insiders de forma híbrida"""
-    logger.info(f"🔍 Buscando insiders: {ticker}")
-    
-    insiders = buscar_insiders_statusinvest(ticker)
-    
-    if insiders is not None and len(insiders) > 0:
-        for mov in insiders:
-            mov['ticker'] = ticker
-        salvar_insiders_manual(insiders)
-        return insiders
-    
-    logger.warning(f"⚠️ {ticker}: StatusInvest falhou, usando fallback")
-    
-    todos = carregar_insiders_manual()
-    insiders_ticker = [m for m in todos if m.get('ticker') == ticker]
-    
-    if len(insiders_ticker) > 0:
-        logger.info(f"📝 {ticker}: {len(insiders_ticker)} movimentações do fallback")
-        return insiders_ticker
-    else:
-        logger.warning(f"⚠️ {ticker}: Sem dados de insider")
-        return []
-
-def filtrar_insiders_relevantes(movimentacoes, dias=30):
-    """Filtra apenas movimentações relevantes"""
-    if not movimentacoes:
-        return []
-    
-    data_limite = datetime.now() - timedelta(days=dias)
-    relevantes = []
-    
-    for mov in movimentacoes:
-        data_str = mov.get('data', '')
-        if data_str:
-            try:
-                for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d/%m/%y']:
-                    try:
-                        data_mov = datetime.strptime(data_str, fmt)
-                        break
-                    except:
-                        continue
-                else:
-                    continue
-                
-                if data_mov >= data_limite:
-                    if 'Compra' in mov.get('tipo', ''):
-                        relevantes.append(mov)
-                    elif 'Venda' in mov.get('tipo', '') and mov.get('quantidade', 0) > 10000:
-                        relevantes.append(mov)
-            except:
-                continue
-    
-    return relevantes
-
-def formatar_alerta_insider(ticker, movimentacoes):
-    """Formata alerta de insider para Telegram"""
-    if not movimentacoes:
-        return None
-    
-    msg = f"🔍 *INSIDER TRADING - {ticker}*\n"
-    msg += "Últimos 30 dias\n\n"
-    msg += "```\n"
-    msg += f"{'Nome':<20} | {'Cargo':<15} | {'Tipo':<6} | {'Qtd':<10} | {'Data':<10}\n"
-    msg += f"{'-'*20} | {'-'*15} | {'-'*6} | {'-'*10} | {'-'*10}\n"
-    
-    for mov in movimentacoes[:5]:
-        nome = mov.get('nome', 'N/A')[:20]
-        cargo = mov.get('cargo', 'N/A')[:15]
-        tipo = mov.get('tipo', 'N/A')[:6]
-        qtd = mov.get('quantidade', 0)
-        data = mov.get('data', 'N/A')[:10]
-        
-        msg += f"{nome:<20} | {cargo:<15} | {tipo:<6} | {qtd:>10,} | {data:<10}\n"
-    
-    msg += "```\n"
-    
-    compras = len([m for m in movimentacoes if 'Compra' in m.get('tipo', '')])
-    vendas = len([m for m in movimentacoes if 'Venda' in m.get('tipo', '')])
-    
-    if compras > vendas:
-        sinal = "🟢 Positivo (mais compras)"
-    elif vendas > compras:
-        sinal = "🔴 Negativo (mais vendas)"
-    else:
-        sinal = "🟡 Neutro"
-    
-    msg += f"\n📊 Sinal: {sinal}"
-    
-    return msg
-
-# ==============================================================================
-# RECOMPRAS AUTOMÁTICAS (POR VARIAÇÃO DE SHARES)
-# ==============================================================================
-def detectar_recompra_por_shares(ticker):
-    """
-    Detecta recompra pela variação de shares outstanding
-    
-    Metodologia:
-    1. Pega shares atuais
-    2. Compara com histórico (balanços trimestrais)
-    3. Se reduziu > 2%, provavelmente tem recompra
-    """
+def detectar_recompra(ticker):
     try:
         acao = yf.Ticker(f"{ticker}.SA")
-        info = acao.info
-        
-        # Shares atuais
-        shares_atual = info.get('sharesOutstanding', 0)
-        
-        if shares_atual <= 0:
-            logger.warning(f"⚠️ {ticker}: Shares inválidos")
-            return None
-        
-        # Tenta pegar histórico de shares (balanços trimestrais)
+        shares = acao.info.get('sharesOutstanding', 0)
+        if shares <= 0: return None
         try:
-            financials = acao.quarterly_balance_sheet
-            
-            if financials is not None and not financials.empty:
-                # Pega últimas 2 colunas (trimestres)
-                if len(financials.columns) >= 2:
-                    # Tenta encontrar "Common Stock" ou "Capital Stock"
-                    shares_historico = None
-                    
-                    for idx in financials.index:
-                        if 'Common Stock' in idx or 'Capital Stock' in idx or 'Share Capital' in idx:
-                            shares_historico = financials.loc[idx]
-                            break
-                    
-                    if shares_historico is not None and len(shares_historico) >= 2:
-                        shares_antigo = shares_historico.iloc[-1]  # Trimestre mais antigo
-                        shares_novo = shares_historico.iloc[0]     # Trimestre mais recente
-                        
-                        # Calcula variação
-                        if shares_antigo > 0:
-                            variacao = (shares_novo - shares_antigo) / shares_antigo
-                            
-                            # Detecta recompra (redução > 2%)
-                            if variacao < -0.02:
-                                confianca = 'Alta' if variacao < -0.05 else 'Média'
-                                return {
-                                    'ticker': ticker,
-                                    'status': 'Provável Recompra',
-                                    'shares_atual': shares_atual,
-                                    'shares_antigo': shares_antigo,
-                                    'variacao': variacao,
-                                    'confianca': confianca,
-                                    'fonte': 'Yahoo Finance (Balance Sheet)'
-                                }
-                            
-                            # Detecta emissão (aumento > 2%)
-                            elif variacao > 0.02:
-                                confianca = 'Alta' if variacao > 0.05 else 'Média'
-                                return {
-                                    'ticker': ticker,
-                                    'status': 'Provável Emissão',
-                                    'shares_atual': shares_atual,
-                                    'shares_antigo': shares_antigo,
-                                    'variacao': variacao,
-                                    'confianca': confianca,
-                                    'fonte': 'Yahoo Finance (Balance Sheet)'
-                                }
-        except Exception as e:
-            logger.warning(f"⚠️ {ticker}: Erro ao analisar histórico: {e}")
-        
-        # Fallback: usa proxy (P/VP < 1 + caixa alto = possível recompra)
-        p_vp = info.get('priceToBook', 0)
-        total_cash = info.get('totalCash', 0)
-        market_cap = info.get('marketCap', 0)
-        
-        if p_vp > 0 and p_vp < 1.0 and total_cash > 0 and market_cap > 0:
-            if total_cash > market_cap * 0.15:
-                return {
-                    'ticker': ticker,
-                    'status': 'Possível Recompra (Indireto)',
-                    'motivo': 'P/VP < 1 e caixa alto (>15% market cap)',
-                    'confianca': 'Baixa',
-                    'fonte': 'Yahoo Finance (Indicadores)'
-                }
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"❌ Erro detectar recompra {ticker}: {e}")
-        return None
+            fin = acao.quarterly_balance_sheet
+            if fin is not None and not fin.empty and len(fin.columns) >= 2:
+                for idx in fin.index:
+                    if 'Common Stock' in idx or 'Capital Stock' in idx:
+                        sh = fin.loc[idx]
+                        if len(sh) >= 2 and sh.iloc[-1] > 0:
+                            var = (sh.iloc[0] - sh.iloc[-1]) / sh.iloc[-1]
+                            if var < -0.02: return {'ticker': ticker, 'status': 'Recompra Detectada', 'shares_atual': shares, 'sh_antigo': sh.iloc[-1], 'sh_novo': sh.iloc[0], 'var': var, 'conf': 'Alta' if var < -0.05 else 'Média'}
+        except: pass
+        if ticker in HISTORICO_SHARES and HISTORICO_SHARES[ticker] > 0:
+            var = (shares - HISTORICO_SHARES[ticker]) / HISTORICO_SHARES[ticker]
+            if var < -0.01: return {'ticker': ticker, 'status': 'Recompra em Andamento', 'shares_atual': shares, 'sh_antigo': HISTORICO_SHARES[ticker], 'var': var, 'conf': 'Média'}
+        HISTORICO_SHARES[ticker] = shares
+    except: pass
+    return None
 
-def buscar_recompras_automatizado(ticker):
-    """Busca recompras de forma 100% automatizada"""
-    logger.info(f"🔍 Buscando recompras automáticas: {ticker}")
-    
-    recompra = detectar_recompra_por_shares(ticker)
-    
-    if recompra:
-        logger.info(f"✅ {ticker}: {recompra['status']} detectado")
-        return [recompra]
-    
-    logger.info(f"ℹ️ {ticker}: Sem indícios de recompra")
-    return []
-
-def formatar_alerta_recompra_auto(ticker, recompras):
-    """Formata alerta de recompra automática"""
-    if not recompras:
-        return None
-    
-    msg = f"🔁 *RECOMPRA DETECTADA - {ticker}*\n\n"
-    
-    for r in recompras:
-        msg += "```\n"
-        msg += f"Status:    {r.get('status', 'N/A')}\n"
-        
-        if 'variacao' in r:
-            msg += f"Variação:  {r['variacao']:.1%}\n"
-            msg += f"Shares:    {r['shares_antigo']/1e9:.2f}B → {r['shares_atual']/1e9:.2f}B\n"
-        
-        if 'motivo' in r:
-            msg += f"Motivo:    {r['motivo']}\n"
-        
-        msg += f"Confiança: {r.get('confianca', 'N/A')}\n"
-        msg += f"Fonte:     {r.get('fonte', 'N/A')}\n"
-        msg += "```\n"
-    
-    if any(r.get('confianca') == 'Alta' for r in recompras):
-        msg += "\n🟢 Recompras reduzem shares e aumentam LPA futuro!"
-    elif any('Emissão' in r.get('status', '') for r in recompras):
-        msg += "\n🔴 Emissões diluem acionistas (atenção!)"
-    else:
-        msg += "\n🟡 Indícios de recompra (confirmar em RI)"
-    
-    return msg
-
-# ==============================================================================
-# FACTOR INVESTING
-# ==============================================================================
-def calcular_score_quality(dados):
-    """Quality Factor (30%)"""
-    scores = {}
+def calcular_score(dados, hist, cfg):
     roe = dados.get("roe", 0)
-    scores["roe"] = 100 if roe > 0.20 else 80 if roe > 0.15 else 60 if roe > 0.10 else 40 if roe > 0.05 else 20
-    
+    scores = {"roe": 100 if roe > 0.20 else 80 if roe > 0.15 else 60 if roe > 0.10 else 40 if roe > 0.05 else 20}
     payout = dados.get("payout_ratio", 0)
     scores["payout"] = 100 if 0.30 <= payout <= 0.60 else 80 if 0.20 <= payout <= 0.70 else 60 if 0.10 <= payout <= 0.80 else 40
-    
     margem = dados.get("profit_margins", 0)
     scores["margem"] = 100 if margem > 0.20 else 80 if margem > 0.15 else 60 if margem > 0.10 else 40 if margem > 0.05 else 20
-    
     divida = dados.get("debt_to_equity", 0)
     scores["divida"] = 100 if divida < 0.5 else 80 if divida < 1.0 else 60 if divida < 1.5 else 40 if divida < 2.0 else 20
+    cresc = dados.get("revenue_growth", 0)
+    scores["cresc"] = 100 if cresc > 0.15 else 80 if cresc > 0.10 else 60 if cresc > 0.05 else 40 if cresc > 0 else 20
+    sq = sum(scores.get(k, 50) * w for k, w in [("roe", 0.30), ("payout", 0.20), ("margem", 0.20), ("divida", 0.20), ("cresc", 0.10)])
     
-    crescimento = dados.get("revenue_growth", 0)
-    scores["crescimento"] = 100 if crescimento > 0.15 else 80 if crescimento > 0.10 else 60 if crescimento > 0.05 else 40 if crescimento > 0 else 20
-    
-    score = scores.get("roe", 50)*0.30 + scores.get("payout", 50)*0.20 + scores.get("margem", 50)*0.20 + scores.get("divida", 50)*0.20 + scores.get("crescimento", 50)*0.10
-    return {"score": score, "detalhes": scores}
-
-def calcular_score_low_vol(dados, hist):
-    """Low Volatility Factor (25%)"""
-    scores = {}
     beta = dados.get("beta", 1.0)
-    scores["beta"] = 100 if beta < 0.8 else 80 if beta < 1.0 else 60 if beta < 1.2 else 40 if beta < 1.5 else 20
-    
+    sbeta = 100 if beta < 0.8 else 80 if beta < 1.0 else 60 if beta < 1.2 else 40 if beta < 1.5 else 20
     try:
-        if len(hist) > 0:
-            vol = hist['Close'].pct_change().std() * np.sqrt(252)
-            scores["volatilidade"] = 100 if vol < 0.20 else 80 if vol < 0.30 else 60 if vol < 0.40 else 40 if vol < 0.50 else 20
-        else:
-            scores["volatilidade"] = 50
-    except:
-        scores["volatilidade"] = 50
+        vol = hist['Close'].pct_change().std() * np.sqrt(252) if len(hist) > 0 else 0.5
+        svol = 100 if vol < 0.20 else 80 if vol < 0.30 else 60 if vol < 0.40 else 40 if vol < 0.50 else 20
+        dd = (hist['Close'].max() - hist['Close'].iloc[-1]) / hist['Close'].max() if len(hist) > 0 else 0.5
+        sdd = 100 if dd < 0.10 else 80 if dd < 0.20 else 60 if dd < 0.30 else 40 if dd < 0.40 else 20
+    except: svol, sdd = 50, 50
+    sl = sbeta * 0.40 + svol * 0.30 + sdd * 0.30
     
-    try:
-        if len(hist) > 0:
-            maxima = hist['Close'].max()
-            atual = hist['Close'].iloc[-1]
-            dd = (maxima - atual) / maxima
-            scores["drawdown"] = 100 if dd < 0.10 else 80 if dd < 0.20 else 60 if dd < 0.30 else 40 if dd < 0.40 else 20
-        else:
-            scores["drawdown"] = 50
-    except:
-        scores["drawdown"] = 50
+    pl = dados.get("pe_ratio", 0)
+    plj = cfg.get("p_l_justo", 8.0)
+    spl = 100 if pl > 0 and pl < plj*0.5 else 80 if pl > 0 and pl < plj*0.75 else 60 if pl > 0 and pl < plj else 40 if pl > 0 and pl < plj*1.25 else 20
+    pvp = dados.get("pb_ratio", 0)
+    pvpj = cfg.get("p_vp_justo", 1.2)
+    spvp = 100 if pvp > 0 and pvp < pvpj*0.5 else 80 if pvp > 0 and pvp < pvpj*0.75 else 60 if pvp > 0 and pvp < pvpj else 40 if pvp > 0 and pvp < pvpj*1.25 else 20
+    ev = dados.get("ev_ebitda", 0)
+    sev = 100 if ev > 0 and ev < 5 else 80 if ev > 0 and ev < 8 else 60 if ev > 0 and ev < 12 else 40 if ev > 0 and ev < 15 else 20
+    sv = spl * 0.40 + spvp * 0.30 + sev * 0.30
     
-    score = scores.get("beta", 50)*0.40 + scores.get("volatilidade", 50)*0.30 + scores.get("drawdown", 50)*0.30
-    return {"score": score, "detalhes": scores}
-
-def calcular_score_value(dados, papel_config):
-    """Value Factor (20%)"""
-    scores = {}
-    p_l = dados.get("pe_ratio", 0)
-    p_l_justo = papel_config.get("p_l_justo", 8.0)
-    scores["p_l"] = 100 if p_l > 0 and p_l < p_l_justo*0.5 else 80 if p_l > 0 and p_l < p_l_justo*0.75 else 60 if p_l > 0 and p_l < p_l_justo else 40 if p_l > 0 and p_l < p_l_justo*1.25 else 20
-    
-    p_vp = dados.get("pb_ratio", 0)
-    p_vp_justo = papel_config.get("p_vp_justo", 1.2)
-    scores["p_vp"] = 100 if p_vp > 0 and p_vp < p_vp_justo*0.5 else 80 if p_vp > 0 and p_vp < p_vp_justo*0.75 else 60 if p_vp > 0 and p_vp < p_vp_justo else 40 if p_vp > 0 and p_vp < p_vp_justo*1.25 else 20
-    
-    ev_ebitda = dados.get("ev_ebitda", 0)
-    scores["ev_ebitda"] = 100 if ev_ebitda > 0 and ev_ebitda < 5 else 80 if ev_ebitda > 0 and ev_ebitda < 8 else 60 if ev_ebitda > 0 and ev_ebitda < 12 else 40 if ev_ebitda > 0 and ev_ebitda < 15 else 20
-    
-    score = scores.get("p_l", 50)*0.40 + scores.get("p_vp", 50)*0.30 + scores.get("ev_ebitda", 50)*0.30
-    return {"score": score, "detalhes": scores}
-
-def calcular_score_dividend(dados):
-    """Dividend Factor (15%)"""
-    scores = {}
     dy = dados.get("dividend_yield", 0)
-    scores["dy"] = 100 if dy > 0.10 else 80 if dy > 0.08 else 60 if dy > 0.06 else 40 if dy > 0.04 else 20
+    sdy = 100 if dy > 0.10 else 80 if dy > 0.08 else 60 if dy > 0.06 else 40 if dy > 0.04 else 20
+    sd = sdy * 0.50 + scores["payout"] * 0.30 + (100 if dados.get("five_year_avg_dividend_yield", 0) > 0 and dy >= dados["five_year_avg_dividend_yield"] else 80 if dados.get("five_year_avg_dividend_yield", 0) > 0 and dy >= dados["five_year_avg_dividend_yield"]*0.8 else 60 if dados.get("five_year_avg_dividend_yield", 0) > 0 else 40) * 0.20
     
-    payout = dados.get("payout_ratio", 0)
-    scores["payout"] = 100 if 0.30 <= payout <= 0.60 else 80 if 0.20 <= payout <= 0.70 else 60 if 0.10 <= payout <= 0.80 else 40
-    
-    dy_medio = dados.get("five_year_avg_dividend_yield", 0)
-    scores["consistencia"] = 100 if dy_medio > 0 and dy >= dy_medio else 80 if dy_medio > 0 and dy >= dy_medio*0.8 else 60 if dy_medio > 0 else 40
-    
-    score = scores.get("dy", 50)*0.50 + scores.get("payout", 50)*0.30 + scores.get("consistencia", 50)*0.20
-    return {"score": score, "detalhes": scores}
-
-def calcular_score_momentum(dados, hist):
-    """Momentum Factor (10%)"""
-    scores = {}
     try:
-        if len(hist) > 0:
-            retorno = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]
-            scores["retorno_12m"] = 100 if retorno > 0.30 else 80 if retorno > 0.15 else 60 if retorno > 0 else 40 if retorno > -0.15 else 20
-            
-            maxima = hist['Close'].max()
-            atual = hist['Close'].iloc[-1]
-            dist = (atual - maxima) / maxima
-            scores["distancia_maxima"] = 100 if dist > -0.10 else 80 if dist > -0.20 else 60 if dist > -0.30 else 40 if dist > -0.40 else 20
-        else:
-            scores["retorno_12m"] = 50
-            scores["distancia_maxima"] = 50
-    except:
-        scores["retorno_12m"] = 50
-        scores["distancia_maxima"] = 50
+        ret = (hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0] if len(hist) > 0 else 0
+        sret = 100 if ret > 0.30 else 80 if ret > 0.15 else 60 if ret > 0 else 40 if ret > -0.15 else 20
+        dist = (hist['Close'].iloc[-1] - hist['Close'].max()) / hist['Close'].max() if len(hist) > 0 else 0
+        sdist = 100 if dist > -0.10 else 80 if dist > -0.20 else 60 if dist > -0.30 else 40 if dist > -0.40 else 20
+    except: sret, sdist = 50, 50
+    sm = sret * 0.60 + sdist * 0.40
     
-    score = scores.get("retorno_12m", 50)*0.60 + scores.get("distancia_maxima", 50)*0.40
-    return {"score": score, "detalhes": scores}
+    total = sq*PESOS_FATORES["quality"] + sl*PESOS_FATORES["low_vol"] + sv*PESOS_FATORES["value"] + sd*PESOS_FATORES["dividend"] + sm*PESOS_FATORES["momentum"]
+    classif = "🟢 EXCELENTE" if total >= 80 else "🟡 MUITO BOM" if total >= 70 else "🟠 BOM" if total >= 60 else "🔴 REGULAR" if total >= 50 else "⚫ RUIM"
+    return {"score_total": total, "classificacao": classif, "fatores": {"quality": {"score": sq}, "low_vol": {"score": sl}, "value": {"score": sv}, "dividend": {"score": sd}, "momentum": {"score": sm}}}
 
-def calcular_score_composto(dados, hist, papel_config):
-    """Score total"""
-    sq = calcular_score_quality(dados)
-    sl = calcular_score_low_vol(dados, hist)
-    sv = calcular_score_value(dados, papel_config)
-    sd = calcular_score_dividend(dados)
-    sm = calcular_score_momentum(dados, hist)
-    
-    score = sq["score"]*PESOS_FATORES["quality"] + sl["score"]*PESOS_FATORES["low_vol"] + sv["score"]*PESOS_FATORES["value"] + sd["score"]*PESOS_FATORES["dividend"] + sm["score"]*PESOS_FATORES["momentum"]
-    
-    if score >= 80: classif = "🟢 EXCELENTE"
-    elif score >= 70: classif = "🟡 MUITO BOM"
-    elif score >= 60: classif = "🟠 BOM"
-    elif score >= 50: classif = "🔴 REGULAR"
-    else: classif = "⚫ RUIM"
-    
-    return {"score_total": score, "classificacao": classif, "fatores": {"quality": sq, "low_vol": sl, "value": sv, "dividend": sd, "momentum": sm}}
-
-def calcular_valor_intrinseco(dados, papel_config):
-    """Valor intrínseco"""
-    preco = dados.get("preco_atual", 0)
-    lpa = dados.get("eps", 0)
-    p_vp = dados.get("pb_ratio", 0)
-    vpa = preco / p_vp if preco > 0 and p_vp > 0 else 0
-    div_12m = dados.get("dividendos_12m", 0)
-    
-    valores = {}
-    if lpa > 0 and vpa > 0:
-        vi = (22.5 * lpa * vpa) ** 0.5
-        valores["graham"] = {"vi": vi, "desconto": (vi - preco) / vi if vi > preco else 0}
-    
-    p_l_justo = papel_config.get("p_l_justo", 8.0)
-    if lpa > 0:
-        vi = lpa * p_l_justo
-        valores["p_l"] = {"vi": vi, "desconto": (vi - preco) / vi if vi > preco else 0}
-    
-    p_vp_justo = papel_config.get("p_vp_justo", 1.2)
-    if vpa > 0:
-        vi = vpa * p_vp_justo
-        valores["p_vp"] = {"vi": vi, "desconto": (vi - preco) / vi if vi > preco else 0}
-    
-    dy_medio = papel_config.get("dy_medio", 0.06)
-    if div_12m > 0 and dy_medio > 0:
-        vi = div_12m / dy_medio
-        valores["dy"] = {"vi": vi, "desconto": (vi - preco) / vi if vi > preco else 0}
-    
-    pesos = {"graham": 0.30, "p_l": 0.25, "p_vp": 0.25, "dy": 0.20}
-    vi_final = sum(d["vi"]*p for (m, d), p in zip(valores.items(), pesos.values())) / sum(pesos.values())
-    desconto = (vi_final - preco) / vi_final if vi_final > preco else 0
-    
-    if desconto >= 0.30: classif = "🟢 ALTO"
-    elif desconto >= 0.15: classif = "🟡 MÉDIO"
-    elif desconto >= 0: classif = "🟠 BAIXO"
-    else: classif = "🔴 SOBREVALORIZADO"
-    
-    return {"vi_final": vi_final, "preco_atual": preco, "desconto_final": desconto, "classificacao": classif, "detalhes": valores}
-
-# ==============================================================================
-# ANÁLISE DE AÇÕES
-# ==============================================================================
-def analisar_acao(ticker):
-    """Analisa ação completa"""
-    logger.info(f"🔍 Analisando: {ticker}")
+def analisar(ticker):
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
-        
         preco = info.get('currentPrice', info.get('regularMarketPrice', 0))
-        
-        dividendos = acao.dividends
-        div_12m = 0
-        if not dividendos.empty:
-            hoje = datetime.now()
-            um_ano_atras = hoje - timedelta(days=365)
-            for data, valor in dividendos.items():
-                if hasattr(data, 'tzinfo') and data.tzinfo is not None:
-                    data = data.replace(tzinfo=None)
-                if um_ano_atras <= data <= hoje:
-                    div_12m += valor
-        
+        divs = acao.dividends
+        div_12m = sum(v for d, v in divs.items() if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= datetime.now() - timedelta(days=365)) if not divs.empty else 0
         dy = div_12m / preco if preco > 0 else 0
-        
-        div_anual, payout_medio, lpa, confianca, proximo_div = estimar_dividendo_por_payout(ticker)
-        
+        div_anual, payout_med, lpa_med, conf, prox = estimar_dividendo(ticker)
         eps = info.get('trailingEps', 0)
         payout = min(div_12m / eps, 1.0) if eps > 0 else 0
-        
-        dados = {
-            "ticker": ticker,
-            "nome": info.get('longName', ticker),
-            "setor": info.get('sector', 'N/A'),
-            "preco_atual": preco,
-            "dividend_rate": div_12m,
-            "dividend_yield": dy,
-            "dividendos_12m": div_12m,
-            "lpa_12m": lpa,
-            "payout_medio": payout_medio,
-            "dividendo_anual_esperado": div_anual,
-            "proximo_dividendo": proximo_div,
-            "confianca_estimativa": confianca,
-            "ex_dividend_date": info.get('exDividendDate'),
-            "payout_ratio": payout,
-            "five_year_avg_dividend_yield": info.get('fiveYearAvgDividendYield', 0),
-            "pe_ratio": info.get('trailingPE', 0),
-            "pb_ratio": info.get('priceToBook', 0),
-            "ev_ebitda": info.get('enterpriseToEbitda', 0),
-            "eps": eps,
-            "price_target_mean": info.get('targetMeanPrice', 0),
-            "recommendation": info.get('recommendationKey', 'N/A'),
-            "beta": info.get('beta', 1.0),
-            "roe": info.get('returnOnEquity', 0),
-            "profit_margins": info.get('profitMargins', 0),
-            "debt_to_equity": info.get('debtToEquity', 0),
-            "revenue_growth": info.get('revenueGrowth', 0),
-            "alertas": []
-        }
-        
-        dados["upside"] = (dados["price_target_mean"] - preco) / preco if preco > 0 and dados["price_target_mean"] > 0 else 0
-        
-        if len(dividendos) >= 2:
-            variacao = (dividendos.iloc[-1] - dividendos.iloc[-2]) / dividendos.iloc[-2] if dividendos.iloc[-2] > 0 else 0
-            if variacao < THRESHOLDS["dividend_cut"]:
-                dados["alertas"].append(f"⚠️ Dividendo caiu {variacao:.1%}")
-        
-        logger.info(f"✅ {ticker} | R$ {preco:.2f} | DY: {dy:.2%} | Est.: R$ {proximo_div:.4f}")
-        return dados
-    except Exception as e:
-        logger.error(f"❌ Erro {ticker}: {e}")
-        return None
+        return {"ticker": ticker, "nome": info.get('longName', ticker), "preco_atual": preco, "dividend_yield": dy, "dividendos_12m": div_12m, "proximo_dividendo": prox, "confianca_estimativa": conf, "ex_dividend_date": info.get('exDividendDate'), "payout_ratio": payout, "pe_ratio": info.get('trailingPE', 0), "pb_ratio": info.get('priceToBook', 0), "eps": eps, "price_target_mean": info.get('targetMeanPrice', 0), "beta": info.get('beta', 1.0), "roe": info.get('returnOnEquity', 0), "profit_margins": info.get('profitMargins', 0), "debt_to_equity": info.get('debtToEquity', 0), "revenue_growth": info.get('revenueGrowth', 0), "upside": (info.get('targetMeanPrice', 0) - preco) / preco if preco > 0 and info.get('targetMeanPrice', 0) > 0 else 0}
+    except: return None
 
-# ==============================================================================
-# ALERTAS
-# ==============================================================================
-def gerar_alertas(dados, hist, papel_config, rotinas):
-    """Gera alertas"""
-    alertas = []
-    
-    if rotinas["mensal"]:
-        score = calcular_score_composto(dados, hist, papel_config)
-        dados["score_composto"] = score
-        if score["score_total"] >= 70:
-            alertas.append({
-                "tipo": "SCORE_ALTO",
-                "titulo": "🟢 Score Factor Investing Alto",
-                "mensagem": f"Score: {score['score_total']:.0f}/100 ({score['classificacao']})\nQuality: {score['fatores']['quality']['score']:.0f} | Low Vol: {score['fatores']['low_vol']['score']:.0f}"
-            })
-    
-    if rotinas["semanal"]:
-        if dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
-            alertas.append({
-                "tipo": "DY_ALTO",
-                "titulo": "🟢 Dividend Yield Atraente",
-                "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
-            })
-        
-        if dados["upside"] > THRESHOLDS["price_target_upside"]:
-            alertas.append({
-                "tipo": "UPSIDE",
-                "titulo": "🟢 Upside Potencial",
-                "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
-            })
-    
-    for alerta in dados.get("alertas", []):
-        if "Dividendo caiu" in alerta:
-            alertas.append({"tipo": "CORTE_DIVIDENDO", "titulo": "🔴 Corte de Dividendo", "mensagem": alerta})
-    
-    if rotinas["mensal"]:
-        vi = calcular_valor_intrinseco(dados, papel_config)
-        dados["valor_intrinseco"] = vi
-        if vi["desconto_final"] >= THRESHOLDS["margem_seguranca_min"]:
-            alertas.append({
-                "tipo": "VALOR_INTRINSECO",
-                "titulo": "🟢 Desconto vs Valor Intrínseco",
-                "mensagem": f"Desconto: {vi['desconto_final']:.1%}\nVI: R$ {vi['vi_final']:.2f} | Preço: R$ {vi['preco_atual']:.2f}\n({vi['classificacao']})"
-            })
-    
-    return alertas
-
-# ==============================================================================
-# TELEGRAM
-# ==============================================================================
-def enviar_telegram(mensagem, disable_web_preview=False):
-    """Envia mensagem"""
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": mensagem,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": disable_web_preview
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=15)
-        if response.status_code == 200:
-            logger.info("✅ Telegram enviado")
-            return True
-        logger.warning(f"⚠️ Telegram status: {response.status_code}")
-    except Exception as e:
-        logger.error(f"❌ Erro Telegram: {e}")
-    return False
-
-# ==============================================================================
-# TABELAS
-# ==============================================================================
-def formatar_tabela_telegram(dados_lista):
-    """Tabela resumo"""
-    if not dados_lista:
-        return None
-    msg = "📊 *RESUMO DIÁRIO - FUNDAMENTOS*\n"
-    msg += f"{datetime.now().strftime('%d/%m/%Y')}\n\n"
-    msg += "```\n"
-    msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'P/L':<6} | {'P/VP':<6} | {'Status':<7}\n"
-    msg += f"{'-'*7} | {'-'*8} | {'-'*7} | {'-'*6} | {'-'*6} | {'-'*7}\n"
-    
-    for dados in sorted(dados_lista, key=lambda x: x.get('dividend_yield', 0), reverse=True):
-        ticker = dados["ticker"]
-        preco = dados["preco_atual"] or 0
-        dy = dados["dividend_yield"] or 0
-        pe = dados["pe_ratio"] or 0
-        pb = dados["pb_ratio"] or 0
-        icone = "🟢" if dy > 0.06 else "🟡" if dy > 0.04 else "🔴"
-        status = "🟢 Buy" if dy > 0.06 and pe < 8 else "🟡 Hold" if dy > 0.04 else "🔴 Sell"
-        msg += f"{ticker:<7} | R$ {preco:>5.2f} | {dy:>6.1%} {icone} | {pe:>5.2f} | {pb:>5.2f} | {status:<7}\n"
-    msg += "```\n\n"
-    msg += "🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%\n"
-    return msg
-
-def formatar_alertas_telegram(alertas_lista, rotinas):
-    """Formata alertas"""
-    if not alertas_lista:
-        return None
-    msg = ""
-    
-    if rotinas["mensal"]:
-        score_alto = [a for a in alertas_lista if a['tipo'] == 'SCORE_ALTO']
-        if score_alto:
-            msg += "🟢 *SCORE FACTOR INVESTING ALTO* (≥70) - Mensal\n\n"
-            msg += "```\n"
-            msg += f"{'Ativo':<7} | {'Score':<8} | {'Classif.':<12}\n"
-            msg += f"{'-'*7} | {'-'*8} | {'-'*12}\n"
-            for a in score_alto:
-                ticker = a['ticker']
-                score = re.search(r'Score: ([\d.]+)/100', a['mensagem']).group(1) if re.search(r'Score: ([\d.]+)/100', a['mensagem']) else 'N/A'
-                classif = re.search(r'\(([\w\s]+)\)', a['mensagem']).group(1) if re.search(r'\(([\w\s]+)\)', a['mensagem']) else 'N/A'
-                msg += f"{ticker:<7} | {score:<8} | {classif:<12}\n"
-            msg += "```\n\n"
-        
-        vi_alertas = [a for a in alertas_lista if a['tipo'] == 'VALOR_INTRINSECO']
-        if vi_alertas:
-            msg += "🟢 *DESCONTO VS VALOR INTRÍNSECO* (≥20%) - Mensal\n\n"
-            msg += "```\n"
-            msg += f"{'Ativo':<7} | {'Preço':<9} | {'VI':<9} | {'Desc.':<8}\n"
-            msg += f"{'-'*7} | {'-'*9} | {'-'*9} | {'-'*8}\n"
-            for a in vi_alertas:
-                ticker = a['ticker']
-                preco = re.search(r'Preço: R\$ ([\d.]+)', a['mensagem']).group(1) if re.search(r'Preço: R\$ ([\d.]+)', a['mensagem']) else 'N/A'
-                vi = re.search(r'VI: R\$ ([\d.]+)', a['mensagem']).group(1) if re.search(r'VI: R\$ ([\d.]+)', a['mensagem']) else 'N/A'
-                desc = re.search(r'Desconto: ([\d.]+%)', a['mensagem']).group(1) if re.search(r'Desconto: ([\d.]+%)', a['mensagem']) else 'N/A'
-                msg += f"{ticker:<7} | R$ {preco:<8} | R$ {vi:<8} | {desc:<8}\n"
-            msg += "```\n\n"
-    
-    if rotinas["semanal"]:
-        dy_alto = [a for a in alertas_lista if a['tipo'] == 'DY_ALTO']
-        if dy_alto:
-            msg += "🟢 *DIVIDEND YIELD ATRAENTE* (>6%) - Semanal\n\n"
-            msg += "```\n"
-            msg += f"{'Ativo':<7} | {'DY Atual':<9} | {'Threshold':<9}\n"
-            msg += f"{'-'*7} | {'-'*9} | {'-'*9}\n"
-            for a in dy_alto:
-                ticker = a['ticker']
-                dy = re.search(r'DY atual: ([\d.]+%)', a['mensagem']).group(1) if re.search(r'DY atual: ([\d.]+%)', a['mensagem']) else 'N/A'
-                msg += f"{ticker:<7} | {dy:<9} | {'>'  + ' 6.00%':<8}\n"
-            msg += "```\n\n"
-        
-        upside = [a for a in alertas_lista if a['tipo'] == 'UPSIDE']
-        if upside:
-            msg += "🟢 *UPSIDE POTENCIAL* (>20%) - Semanal\n\n"
-            msg += "```\n"
-            msg += f"{'Ativo':<7} | {'Upside':<9} | {'Alvo':<12}\n"
-            msg += f"{'-'*7} | {'-'*9} | {'-'*12}\n"
-            for a in upside:
-                ticker = a['ticker']
-                up = re.search(r'Upside: ([\d.]+%)', a['mensagem']).group(1) if re.search(r'Upside: ([\d.]+%)', a['mensagem']) else 'N/A'
-                alvo = re.search(r'alvo: R\$ ([\d.]+)', a['mensagem']).group(1) if re.search(r'alvo: R\$ ([\d.]+)', a['mensagem']) else 'N/A'
-                msg += f"{ticker:<7} | {up:<9} | {'R$ ' + str(alvo):<11}\n"
-            msg += "```\n\n"
-    
-    return msg
-
-def formatar_data_com_telegram(dados_com):
-    """Data COM"""
-    if not dados_com:
-        return None
-    msg = "💰 *DATA COM PRÓXIMA*\n"
-    msg += "Fonte: Estimativa Payout × LPA (Média 5 Anos)\n\n"
-    msg += "```\n"
-    msg += f"{'Ativo':<7} | {'Data COM':<11} | {'Dias':<6} | {'Estimado':<10} | {'DY':<7}\n"
-    msg += f"{'-'*7} | {'-'*11} | {'-'*6} | {'-'*10} | {'-'*7}\n"
-    
-    for dados in sorted(dados_com, key=lambda x: x["dias_para_com"]):
-        ticker = dados["ticker"]
-        data_com = dados["data_com"]
-        dias = dados["dias_para_com"]
-        valor = dados.get("proximo_dividendo", 0)
-        dy = dados["dividend_yield"]
-        confianca = dados.get("confianca_estimativa", 0)
-        icone = "🟢" if confianca >= 0.7 else "🟡" if confianca >= 0.5 else "🔴"
-        msg += f"{ticker:<7} | {data_com:<11} | {dias:>5}  | R$ {valor:>6.4f} {icone} | {dy:>6.2%}\n"
-    msg += "```\n"
-    msg += "🟢 Alta confiança | 🟡 Média | 🔴 Baixa\n"
-    return msg
-
-def formatar_factors_detalhado(dados_factors):
-    """Score detalhado (MENSAL)"""
-    if not dados_factors:
-        return None
-    msg = "🛡️ *SCORE POR FATOR - DETALHADO* - Mensal\n\n"
-    msg += "```\n"
-    msg += f"{'Ativo':<7} | {'Total':<8} | {'Qlty':<7} | {'LowV':<7} | {'Value':<7} | {'Div':<7} | {'Mom':<7}\n"
-    msg += f"{'-'*7} | {'-'*8} | {'-'*7} | {'-'*7} | {'-'*7} | {'-'*7} | {'-'*7}\n"
-    
-    for dados in sorted(dados_factors, key=lambda x: x.get('score_total', 0), reverse=True):
-        ticker = dados["ticker"]
-        score_total = dados.get("score_total", 0)
-        quality = dados.get("fatores", {}).get("quality", {}).get("score", 0)
-        low_vol = dados.get("fatores", {}).get("low_vol", {}).get("score", 0)
-        value = dados.get("fatores", {}).get("value", {}).get("score", 0)
-        dividend = dados.get("fatores", {}).get("dividend", {}).get("score", 0)
-        momentum = dados.get("fatores", {}).get("momentum", {}).get("score", 0)
-        msg += f"{ticker:<7} | {score_total:>5.0f} | {quality:>5.0f} | {low_vol:>5.0f} | {value:>5.0f} | {dividend:>5.0f} | {momentum:>5.0f}\n"
-    msg += "```\n\n"
-    msg += "Pesos: Quality 30% | Low Vol 25% | Value 20% | Div 15% | Mom 10%\n"
-    msg += "🟢 > 70  |  🟡 60-70  |  🔴 < 60\n"
-    return msg
-
-# ==============================================================================
-# ROTINAS
-# ==============================================================================
-def eh_segunda_feira():
-    return datetime.now().weekday() == 0
-
-def eh_primeiro_dia_util():
-    hoje = datetime.now()
-    primeiro_dia = datetime(hoje.year, hoje.month, 1)
-    if primeiro_dia.weekday() == 5:
-        primeiro_dia_util = primeiro_dia + timedelta(days=2)
-    elif primeiro_dia.weekday() == 6:
-        primeiro_dia_util = primeiro_dia + timedelta(days=1)
-    else:
-        primeiro_dia_util = primeiro_dia
-    return (hoje.day == primeiro_dia_util.day and hoje.month == primeiro_dia_util.month and hoje.year == primeiro_dia_util.year)
-
-def verificar_rotinas():
-    rotinas = {"diaria": True, "semanal": eh_segunda_feira(), "mensal": eh_primeiro_dia_util()}
-    logger.info(f"📅 Rotinas: Diária={rotinas['diaria']}, Semanal={rotinas['semanal']}, Mensal={rotinas['mensal']}")
-    return rotinas
-
-# ==============================================================================
-# RADAR PRINCIPAL
-# ==============================================================================
 def main():
-    logger.info("="*60)
     logger.info(f"🤖 RADAR IDIV - {len(MEUS_PAPEIS)} ativos")
-    logger.info("="*60)
-    
-    rotinas = verificar_rotinas()
     hoje = datetime.now().strftime("%d/%m/%Y")
     enviar_telegram(f"🤖 *Radar IDIV | {hoje}*\nIniciando monitoramento de {len(MEUS_PAPEIS)} ativos...")
     
-    todos_dados = []
-    dados_data_com = []
-    alertas_gerais = []
-    dados_factors_detalhado = []
-    alertas_insider = []
-    alertas_recompra = []
+    todos, data_com, alertas, todas_recompras = [], [], [], []
+    segunda = datetime.now().weekday() == 0
+    primeiro_dia = datetime.now().day <= 3
     
-    for papel in MEUS_PAPEIS:
-        ticker = papel["ticker"]
-        dados = analisar_acao(ticker)
-        if not dados:
-            continue
+    for p in MEUS_PAPEIS:
+        t = p["ticker"]
+        dados = analisar(t)
+        if not dados: continue
         
-        acao = yf.Ticker(f"{ticker}.SA")
+        acao = yf.Ticker(f"{t}.SA")
         hist = acao.history(period="6mo")
         
-        alertas = gerar_alertas(dados, hist, papel, rotinas)
-        for alerta in alertas:
-            alertas_gerais.append({"ticker": ticker, "nome": dados["nome"], "tipo": alerta["tipo"], "mensagem": alerta["mensagem"]})
+        # Insiders
+        ins = buscar_insiders(t)
+        if ins:
+            salvar_insiders_csv(ins, t)
+            relevantes = filtrar_insiders(ins)
+            if relevantes:
+                msg = f"🔍 *INSIDER TRADING - {t}*\nÚltimos 30 dias\n\n```\n{'Nome':<20} | {'Cargo':<15} | {'Tipo':<6} | {'Qtd':<10} | {'Data':<10}\n{'-'*66}\n"
+                for m in relevantes[:5]: msg += f"{m['nome']:<20} | {m['cargo']:<15} | {m['tipo']:<6} | {m['quantidade']:>10,} | {m['data']:<10}\n"
+                compras = len([x for x in relevantes if 'Compra' in x.get('tipo', '')])
+                msg += f"```\n\n📊 Sinal: {'🟢 Positivo' if compras > len(relevantes) - compras else '🔴 Negativo' if compras < len(relevantes) - compras else '🟡 Neutro'}"
+                alertas.append(msg)
         
-        todos_dados.append(dados)
-        
-        # ======================================================================
-        # INSIDER TRADING
-        # ======================================================================
-        insiders = buscar_insiders_completo(ticker)
-        insiders_relevantes = filtrar_insiders_relevantes(insiders, dias=30)
-        
-        if insiders_relevantes:
-            msg = formatar_alerta_insider(ticker, insiders_relevantes)
-            if msg:
-                alertas_insider.append(msg)
-        
-        # ======================================================================
-        # RECOMPRAS AUTOMÁTICAS (100% Yahoo Finance)
-        # ======================================================================
-        recompras = buscar_recompras_automatizado(ticker)
-        
-        if recompras:
-            msg = formatar_alerta_recompra_auto(ticker, recompras)
-            if msg:
-                alertas_recompra.append(msg)
+        # Recompras
+        rec = detectar_recompra(t)
+        if rec: todas_recompras.append(rec)
         
         # Data COM
         if dados.get("proximo_dividendo", 0) > 0 and dados.get("ex_dividend_date"):
-            data_com = datetime.fromtimestamp(dados["ex_dividend_date"])
-            dias = (data_com - datetime.now()).days
-            if 0 <= dias <= 15:
-                dados_data_com.append({
-                    "ticker": ticker,
-                    "nome": dados["nome"],
-                    "data_com": data_com.strftime("%d/%m/%Y"),
-                    "dias_para_com": dias,
-                    "proximo_dividendo": dados["proximo_dividendo"],
-                    "dividend_yield": dados["dividend_yield"],
-                    "confianca_estimativa": dados["confianca_estimativa"]
-                })
+            dc = datetime.fromtimestamp(dados["ex_dividend_date"])
+            dias = (dc - datetime.now()).days
+            if 0 <= dias <= 15: data_com.append({**dados, "data_com": dc.strftime("%d/%m/%Y"), "dias": dias})
         
-        # Score detalhado (MENSAL)
-        if rotinas["mensal"]:
-            score = dados.get("score_composto", {})
-            if score.get("score_total", 0) > 0:
-                dados_factors_detalhado.append({"ticker": ticker, "score_total": score["score_total"], "classificacao": score["classificacao"], "fatores": score["fatores"]})
+        # Score (mensal)
+        if primeiro_dia:
+            score = calcular_score(dados, hist, p)
+            if score["score_total"] >= 70: alertas.append(f"🟢 *SCORE ALTO - {t}*\nScore: {score['score_total']:.0f}/100 ({score['classificacao']})")
+            dados["score"] = score
+        
+        # DY (semanal)
+        if segunda and dados["dividend_yield"] > 0.06: alertas.append(f"🟢 *DY ATRAENTE - {t}*\nDY: {dados['dividend_yield']:.2%}")
+        
+        todos.append(dados)
     
     # Data COM
-    if dados_data_com:
-        msg = formatar_data_com_telegram(dados_data_com)
-        if msg: enviar_telegram(msg)
-    
-    # Alertas Insider
-    for msg in alertas_insider:
+    if data_com:
+        msg = "💰 *DATA COM PRÓXIMA*\nFonte: Estimativa Payout × LPA\n\n```\n"
+        msg += f"{'Ativo':<7} | {'Data COM':<11} | {'Dias':<6} | {'Estimado':<10} | {'DY':<7}\n{'-'*47}\n"
+        for d in sorted(data_com, key=lambda x: x["dias"]): msg += f"{d['ticker']:<7} | {d['data_com']:<11} | {d['dias']:>5}  | R$ {d['proximo_dividendo']:>6.4f} | {d['dividend_yield']:>6.2%}\n"
+        msg += "```"
         enviar_telegram(msg)
     
-    # Alertas Recompra
-    for msg in alertas_recompra:
+    # Recompras (tabela única)
+    if todas_recompras:
+        msg = "🔁 *RECOMPRAS DETECTADAS*\nVariação de Shares\n\n```\n"
+        msg += f"{'Ativo':<7} | {'Status':<22} | {'Variação':<10} | {'Shares':<20}\n{'-'*63}\n"
+        for r in todas_recompras:
+            var = f"{r['var']:.1%}"
+            sh = f"{r['sh_antigo']/1e9:.2f}B→{r['sh_novo']/1e9:.2f}B" if 'sh_novo' in r else f"{r['sh_antigo']/1e9:.2f}B→{r['shares_atual']/1e9:.2f}B"
+            msg += f"{r['ticker']:<7} | {r['status']:<22} | {var:<10} | {sh:<20}\n"
+        msg += "```\n\n🟢 Recompras reduzem shares e aumentam LPA futuro!"
         enviar_telegram(msg)
     
     # Alertas
-    if alertas_gerais:
-        msg = formatar_alertas_telegram(alertas_gerais, rotinas)
-        if msg: enviar_telegram(msg)
+    for a in alertas: enviar_telegram(a)
     
     # Resumo
-    if todos_dados:
-        msg = formatar_tabela_telegram(todos_dados)
-        if msg: enviar_telegram(msg)
-    
-    # Factors detalhado (MENSAL)
-    if rotinas["mensal"] and dados_factors_detalhado:
-        msg = formatar_factors_detalhado(dados_factors_detalhado)
-        if msg: enviar_telegram(msg)
+    if todos:
+        msg = "📊 *RESUMO DIÁRIO*\n" + hoje + "\n\n```\n"
+        msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'P/L':<6} | {'P/VP':<6} | {'Status':<7}\n{'-'*47}\n"
+        for d in sorted(todos, key=lambda x: x.get('dividend_yield', 0), reverse=True):
+            icone = "🟢" if d['dividend_yield'] > 0.06 else "🟡" if d['dividend_yield'] > 0.04 else "🔴"
+            status = "🟢 Buy" if d['dividend_yield'] > 0.06 and d['pe_ratio'] < 8 else "🟡 Hold" if d['dividend_yield'] > 0.04 else "🔴 Sell"
+            msg += f"{d['ticker']:<7} | R$ {d['preco_atual']:>5.2f} | {d['dividend_yield']:>6.1%} {icone} | {d['pe_ratio']:>5.2f} | {d['pb_ratio']:>5.2f} | {status:<7}\n"
+        msg += "```\n\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
+        enviar_telegram(msg)
     
     # Final
-    msg_final = (
-        f"✅ *Monitoramento Concluído!*\n\n"
-        f"📊 Ativos analisados: {len(todos_dados)}\n"
-        f"💰 Alertas Data COM: {len(dados_data_com)}\n"
-        f"🔍 Alertas Insider: {len(alertas_insider)}\n"
-        f"🔁 Alertas Recompra: {len(alertas_recompra)}\n"
-        f"📈 Alertas: {len(alertas_gerais)}\n"
-        f"📅 Rotinas: Diária ✅ | Semanal {'✅' if rotinas['semanal'] else '❌'} | Mensal {'✅' if rotinas['mensal'] else '❌'}"
-    )
-    enviar_telegram(msg_final)
-    
-    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas + {len(alertas_insider)} insiders + {len(alertas_recompra)} recompras")
+    enviar_telegram(f"✅ *Concluído!*\n\n📊 Ativos: {len(todos)}\n💰 Data COM: {len(data_com)}\n🔁 Recompras: {len(todas_recompras)}\n📈 Alertas: {len(alertas)}")
+    logger.info(f"✅ Fim: {len(alertas)} alertas")
 
-# ==============================================================================
-# MAIN
-# ==============================================================================
 if __name__ == "__main__":
     main()
