@@ -408,7 +408,7 @@ def main():
     todos_dados = []
     dados_data_com = []
     alertas = []
-    dados_com_score = []  # Para ranking mensal
+    dados_com_score = []
     
     # Verifica rotinas
     hoje_semana = datetime.now().weekday()
@@ -495,14 +495,14 @@ def main():
         enviar_telegram(alerta)
     
     # ==========================================================================
-    # ENVIA RESUMO DIÁRIO (COM SCORE)
+    # ENVIA RESUMO DIÁRIO (SEMPRE!)
     # ==========================================================================
     if todos_dados:
         msg = "📊 *RESUMO DIÁRIO*\n"
         msg += hoje + "\n\n"
         msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'DY*':<7} | {'MM200':<8} | {'P/L':<6} | {'Score':<6} | {'Status':<7}\n"
-        msg += f"{'-'*68}\n"
+        msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'DY*':<7} | {'MM200':<8} | {'P/L':<6} | {'Status':<7}\n"
+        msg += f"{'-'*60}\n"
         
         for d in sorted(todos_dados, key=lambda x: x.get('dividend_yield', 0), reverse=True):
             ticker = d.get('ticker', 'N/A')
@@ -512,7 +512,6 @@ def main():
             dy_proj_pct = dy_proj * 100 if dy_proj > 0 else 0
             distancia = d.get('distancia_media_200d', 0)
             pe = d.get('pe_ratio', 0)
-            score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
             
             # Ícone DY
             if dy > 0.06:
@@ -539,9 +538,6 @@ def main():
             else:
                 dy_proj_str = "N/A"
             
-            # Score
-            score_str = f"{score:.0f}" if score > 0 else "N/A"
-            
             # Status
             if dy > 0.06 and pe < 8 and distancia < 0:
                 status = "🟢 Buy"
@@ -557,7 +553,6 @@ def main():
                 f"{dy_proj_str:>6} | "
                 f"{mm200:<8} | "
                 f"{pe:>5.2f} | "
-                f"{score_str:>5} | "
                 f"{status:<7}\n"
             )
         
@@ -565,11 +560,10 @@ def main():
         msg += "\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
         msg += "\nDY* = Dividendo Projetado (LPA Forward × Payout 5a)"
         msg += "\nMM200 = Distância da Média Móvel 200 dias"
-        msg += "\nScore = Factor Investing (0-100)"
         enviar_telegram(msg)
     
     # ==========================================================================
-    # ENVIA RANKING FACTOR INVESTING (MENSAL)
+    # ENVIA RANKING FACTOR INVESTING (MENSAL - PRIMEIROS 3 DIAS)
     # ==========================================================================
     if dados_com_score:
         msg = "🏆 *RANKING FACTOR INVESTING*\n"
@@ -579,7 +573,6 @@ def main():
         msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Classif.':<12} | {'Qual.':<6} | {'Val.':<6} | {'Div.':<6}\n"
         msg += f"{'-'*54}\n"
         
-        # Ordena por score (maior primeiro)
         ranking = sorted(dados_com_score, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)[:10]
         
         for i, d in enumerate(ranking, 1):
@@ -612,7 +605,7 @@ def main():
         f"📊 Ativos analisados: {len(todos_dados)}\n"
         f"💰 Data COM: {len(dados_data_com)}\n"
         f"📈 Alertas: {len(alertas)}\n"
-        f"🏆 Ranking: {'✅' if dados_com_score else '❌'}"
+        f"🏆 Ranking: {'✅' if dados_com_score else '❌ (apenas dias 1-3)'}"
     )
     
     logger.info(f"✅ Fim: {len(alertas)} alertas enviados")
