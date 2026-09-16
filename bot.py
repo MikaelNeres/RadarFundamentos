@@ -1,18 +1,19 @@
 """
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 =====================================================
-Fonte: Yahoo Finance
-Versão: Factor Investing + Payout × LPA (Média 5 Anos)
+Fonte: Yahoo Finance + StatusInvest (Insiders)
+Versão: Factor Investing + Payout × LPA (Média 5 Anos) + Insiders
 
-Melhorias:
-- Usa média de 5 anos de LPA e Payout
-- Remove distorções de eventos extraordinários
-- Mais robusto para estimativas de dividendos
+Novidades:
+- Rastreio de insiders (compras/vendas de executivos)
+- Fallback manual via CSV
+- Alertas de insider trading
 
 Como usar:
 1. Edite MEUS_ATIVOS para adicionar/remover ações
-2. Commit no GitHub
-3. Receba alertas no Telegram (automático)
+2. Atualize insiders_manual.csv se necessário (2-3 min/semana)
+3. Commit no GitHub
+4. Receba alertas no Telegram (automático)
 """
 
 # ==============================================================================
@@ -26,7 +27,7 @@ import logging
 import pandas as pd
 import numpy as np
 
-# Logs
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)-8s | %(message)s',
@@ -108,32 +109,19 @@ PESOS_FATORES = {
 # ESTIMATIVA DE DIVIDENDO (MÉDIA 5 ANOS)
 # ==============================================================================
 def estimar_dividendo_por_payout(ticker):
-    """
-    Estima dividendo usando MÉDIA DE 5 ANOS de LPA e Payout
-    
-    Fórmula:
-    Dividendo Anual = (LPA Médio 5 Anos) × (Payout Médio 5 Anos)
-    
-    Vantagens:
-    - Suaviza sazonalidade
-    - Remove eventos extraordinários
-    - Reflete política consistente
-    """
+    """Estima dividendo usando média de 5 anos"""
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
         
-        # LPA atual (fallback)
         lpa_atual = info.get('trailingEps', 0)
         if not lpa_atual or lpa_atual <= 0:
             return 0, 0, 0, 0, 0
         
-        # Dividendos históricos
         dividendos = acao.dividends
         if dividendos.empty:
             return 0, 0, 0, 0, 0
         
-        # Agrupa dividendos por ano (últimos 5 anos)
         hoje = datetime.now()
         cinco_anos_atras = hoje - timedelta(days=5*365)
         
@@ -141,20 +129,16 @@ def estimar_dividendo_por_payout(ticker):
         for data, valor in dividendos.items():
             if hasattr(data, 'tzinfo') and data.tzinfo is not None:
                 data = data.replace(tzinfo=None)
-            
             if data >= cinco_anos_atras:
                 ano = data.year
                 if ano not in dividendos_por_ano:
                     dividendos_por_ano[ano] = 0
                 dividendos_por_ano[ano] += valor
         
-        # Tenta pegar financials para estimar LPA por ano
         lpa_por_ano = {}
         try:
             financials = acao.financials
             if financials is not None and not financials.empty:
-                # Simplificação: usa LPA atual para todos os anos
-                # Yahoo não fornece LPA histórico facilmente
                 for ano in dividendos_por_ano.keys():
                     lpa_por_ano[ano] = lpa_atual
             else:
@@ -164,7 +148,6 @@ def estimar_dividendo_por_payout(ticker):
             for ano in dividendos_por_ano.keys():
                 lpa_por_ano[ano] = lpa_atual
         
-        # Calcula payout por ano
         payouts_anuais = []
         lpa_usados = []
         
@@ -176,7 +159,6 @@ def estimar_dividendo_por_payout(ticker):
                 payouts_anuais.append(payout_ano)
                 lpa_usados.append(lpa_ano)
         
-        # Médias (5 anos)
         if len(payouts_anuais) > 0 and len(lpa_usados) > 0:
             lpa_medio_5a = sum(lpa_usados) / len(lpa_usados)
             payout_medio_5a = sum(payouts_anuais) / len(payouts_anuais)
@@ -184,17 +166,14 @@ def estimar_dividendo_por_payout(ticker):
             lpa_medio_5a = lpa_atual
             payout_medio_5a = 0.50
         
-        # Dividendo anual esperado
         div_anual_esperado = lpa_medio_5a * payout_medio_5a
         
-        # Detecta frequência
         um_ano_atras = hoje - timedelta(days=365)
         count = sum(1 for d in dividendos.index if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= um_ano_atras)
         
         frequencia = 4 if count >= 4 else 2 if count >= 2 else 1
         proximo_dividendo = div_anual_esperado / frequencia
         
-        # Confiança
         confianca = 0.5
         if lpa_medio_5a > 0: confianca += 0.2
         if len(payouts_anuais) >= 3:
@@ -212,6 +191,165 @@ def estimar_dividendo_por_payout(ticker):
     except Exception as e:
         logger.error(f"❌ Erro estimar {ticker}: {e}")
         return 0, 0, 0, 0, 0
+
+# ==============================================================================
+# INSIDER TRADING (StatusInvest + Fallback)
+# ==============================================================================
+def buscar_insiders_statusinvest(ticker):
+    """Busca movimentação de insiders na StatusInvest"""
+    try:
+        from bs4 import BeautifulSoup
+        
+        url = f"https://statusinvest.com.br/acao/{ticker}/insiders"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            tabela = soup.find('table', {'class': 'table'})
+            
+            movimentacoes = []
+            if tabela:
+                for row in tabela.find_all('tr')[1:]:
+                    cols = row.find_all('td')
+                    if len(cols) >= 5:
+                        try:
+                            movimentacoes.append({
+                                'nome': cols[0].text.strip(),
+                                'cargo': cols[1].text.strip(),
+                                'tipo': cols[2].text.strip(),
+                                'quantidade': int(cols[3].text.strip().replace('.', '').replace(',', '')),
+                                'data': cols[4].text.strip()
+                            })
+                        except:
+                            continue
+            
+            logger.info(f"📊 {ticker}: {len(movimentacoes)} movimentações encontradas")
+            return movimentacoes
+        else:
+            logger.warning(f"⚠️ {ticker}: StatusInvest retornou {response.status_code}")
+            return None
+            
+    except Exception as e:
+        logger.warning(f"⚠️ {ticker}: Erro buscar insiders StatusInvest: {e}")
+        return None
+
+def carregar_insiders_manual():
+    """Carrega insiders de arquivo CSV (fallback manual)"""
+    try:
+        df = pd.read_csv('insiders_manual.csv')
+        return df.to_dict('records')
+    except FileNotFoundError:
+        logger.warning("⚠️ Arquivo insiders_manual.csv não encontrado")
+        return []
+    except Exception as e:
+        logger.error(f"❌ Erro carregar insiders manual: {e}")
+        return []
+
+def salvar_insiders_manual(movimentacoes):
+    """Salva movimentações em CSV"""
+    try:
+        existentes = carregar_insiders_manual()
+        todas = existentes + movimentacoes
+        
+        df = pd.DataFrame(todas)
+        df = df.drop_duplicates(subset=['ticker', 'nome', 'data'], keep='last')
+        df.to_csv('insiders_manual.csv', index=False)
+        logger.info(f"✅ {len(movimentacoes)} movimentações salvas")
+    except Exception as e:
+        logger.error(f"❌ Erro salvar insiders manual: {e}")
+
+def buscar_insiders_completo(ticker):
+    """Busca insiders de forma híbrida"""
+    logger.info(f"🔍 Buscando insiders: {ticker}")
+    
+    insiders = buscar_insiders_statusinvest(ticker)
+    
+    if insiders is not None and len(insiders) > 0:
+        for mov in insiders:
+            mov['ticker'] = ticker
+        salvar_insiders_manual(insiders)
+        return insiders
+    
+    logger.warning(f"⚠️ {ticker}: StatusInvest falhou, usando fallback manual")
+    
+    todos = carregar_insiders_manual()
+    insiders_ticker = [m for m in todos if m.get('ticker') == ticker]
+    
+    if len(insiders_ticker) > 0:
+        logger.info(f"📝 {ticker}: {len(insiders_ticker)} movimentações do fallback")
+        return insiders_ticker
+    else:
+        logger.warning(f"⚠️ {ticker}: Sem dados de insider")
+        return []
+
+def filtrar_insiders_relevantes(movimentacoes, dias=30):
+    """Filtra apenas movimentações relevantes"""
+    if not movimentacoes:
+        return []
+    
+    data_limite = datetime.now() - timedelta(days=dias)
+    relevantes = []
+    
+    for mov in movimentacoes:
+        data_str = mov.get('data', '')
+        if data_str:
+            try:
+                for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d/%m/%y']:
+                    try:
+                        data_mov = datetime.strptime(data_str, fmt)
+                        break
+                    except:
+                        continue
+                else:
+                    continue
+                
+                if data_mov >= data_limite:
+                    if 'Compra' in mov.get('tipo', ''):
+                        relevantes.append(mov)
+                    elif 'Venda' in mov.get('tipo', '') and mov.get('quantidade', 0) > 10000:
+                        relevantes.append(mov)
+            except:
+                continue
+    
+    return relevantes
+
+def formatar_alerta_insider(ticker, movimentacoes):
+    """Formata alerta de insider para Telegram"""
+    if not movimentacoes:
+        return None
+    
+    msg = f"🔍 *INSIDER TRADING - {ticker}*\n"
+    msg += "Últimos 30 dias\n\n"
+    msg += "```\n"
+    msg += f"{'Nome':<20} | {'Cargo':<15} | {'Tipo':<6} | {'Qtd':<10} | {'Data':<10}\n"
+    msg += f"{'-'*20} | {'-'*15} | {'-'*6} | {'-'*10} | {'-'*10}\n"
+    
+    for mov in movimentacoes[:5]:
+        nome = mov.get('nome', 'N/A')[:20]
+        cargo = mov.get('cargo', 'N/A')[:15]
+        tipo = mov.get('tipo', 'N/A')[:6]
+        qtd = mov.get('quantidade', 0)
+        data = mov.get('data', 'N/A')[:10]
+        
+        msg += f"{nome:<20} | {cargo:<15} | {tipo:<6} | {qtd:>10,} | {data:<10}\n"
+    
+    msg += "```\n"
+    
+    compras = len([m for m in movimentacoes if 'Compra' in m.get('tipo', '')])
+    vendas = len([m for m in movimentacoes if 'Venda' in m.get('tipo', '')])
+    
+    if compras > vendas:
+        sinal = "🟢 Positivo (mais compras)"
+    elif vendas > compras:
+        sinal = "🔴 Negativo (mais vendas)"
+    else:
+        sinal = "🟡 Neutro"
+    
+    msg += f"\n📊 Sinal: {sinal}"
+    
+    return msg
 
 # ==============================================================================
 # FACTOR INVESTING
@@ -402,7 +540,6 @@ def analisar_acao(ticker):
         
         dy = div_12m / preco if preco > 0 else 0
         
-        # Estimativa Payout × LPA (Média 5 Anos)
         div_anual, payout_medio, lpa, confianca, proximo_div = estimar_dividendo_por_payout(ticker)
         
         eps = info.get('trailingEps', 0)
@@ -693,6 +830,7 @@ def main():
     dados_data_com = []
     alertas_gerais = []
     dados_factors_detalhado = []
+    alertas_insider = []
     
     for papel in MEUS_PAPEIS:
         ticker = papel["ticker"]
@@ -708,6 +846,17 @@ def main():
             alertas_gerais.append({"ticker": ticker, "nome": dados["nome"], "tipo": alerta["tipo"], "mensagem": alerta["mensagem"]})
         
         todos_dados.append(dados)
+        
+        # ======================================================================
+        # NOVO: INSIDER TRADING
+        # ======================================================================
+        insiders = buscar_insiders_completo(ticker)
+        insiders_relevantes = filtrar_insiders_relevantes(insiders, dias=30)
+        
+        if insiders_relevantes:
+            msg = formatar_alerta_insider(ticker, insiders_relevantes)
+            if msg:
+                alertas_insider.append(msg)
         
         # Data COM
         if dados.get("proximo_dividendo", 0) > 0 and dados.get("ex_dividend_date"):
@@ -735,6 +884,10 @@ def main():
         msg = formatar_data_com_telegram(dados_data_com)
         if msg: enviar_telegram(msg)
     
+    # Alertas Insider (NOVO!)
+    for msg in alertas_insider:
+        enviar_telegram(msg)
+    
     # Alertas
     if alertas_gerais:
         msg = formatar_alertas_telegram(alertas_gerais, rotinas)
@@ -755,12 +908,13 @@ def main():
         f"✅ *Monitoramento Concluído!*\n\n"
         f"📊 Ativos analisados: {len(todos_dados)}\n"
         f"💰 Alertas Data COM: {len(dados_data_com)}\n"
+        f"🔍 Alertas Insider: {len(alertas_insider)}\n"
         f"📈 Alertas: {len(alertas_gerais)}\n"
         f"📅 Rotinas: Diária ✅ | Semanal {'✅' if rotinas['semanal'] else '❌'} | Mensal {'✅' if rotinas['mensal'] else '❌'}"
     )
     enviar_telegram(msg_final)
     
-    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas")
+    logger.info(f"✅ Fim: {len(alertas_gerais)} alertas + {len(alertas_insider)} insiders")
 
 # ==============================================================================
 # MAIN
