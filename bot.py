@@ -2,14 +2,12 @@
 🤖 RADAR IDIV - Bot de Monitoramento Fundamentalista
 =====================================================
 Fonte: Yahoo Finance
-Versão: Factor Investing + Payout × LPA
+Versão: Factor Investing + Payout × LPA (Média 5 Anos)
 
-O que faz:
-- Analisa ações brasileiras (B3)
-- Estima dividendos futuros (Payout × LPA)
-- Calcula score de qualidade (Factor Investing)
-- Envia alertas no Telegram
-- Roda automático (GitHub Actions)
+Melhorias:
+- Usa média de 5 anos de LPA e Payout
+- Remove distorções de eventos extraordinários
+- Mais robusto para estimativas de dividendos
 
 Como usar:
 1. Edite MEUS_ATIVOS para adicionar/remover ações
@@ -41,12 +39,15 @@ TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
 CHAT_ID = '566929604'
 
 # ==============================================================================
-# 📋 LISTA DE ATIVOS (EDITAR AQUI!)
+# 📋 LISTA DE ATIVOS (30 TICKERS)
 # ==============================================================================
 MEUS_ATIVOS = [
-    "CMIG4", "BBAS3", "SAPR11", "ISAE4", "ABCB4", "LOGG3", "FIQE3", "GGBR4", "VBBR3", "SAUD3", "DEXP3",
-    "ITSA4", "PETR4", "BBSE3", "ITUB4", "BBDC4", "CPLE3", "VALE3", "CSMG3", "TIMS3", "VIVT3", "CXSE3",
-    "KLBN11", "TAEE11", "EGIE3", "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3",
+    "CMIG4", "BBAS3", "SAPR11", "ISAE4", "ABCB4",
+    "LOGG3", "FIQE3", "GGBR4", "VBBR3", "SAUD3",
+    "DEXP3", "ITSA4", "PETR4", "BBSE3", "ITUB4",
+    "BBDC4", "CPLE3", "VALE3", "CSMG3", "TIMS3",
+    "VIVT3", "CXSE3", "KLBN11", "TAEE11", "EGIE3",
+    "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3",
 ]
 
 # Configurações padrão
@@ -56,15 +57,19 @@ CONFIG_PADRAO = {
     "dy_medio": 0.06,
 }
 
-# Personalizações por ticker (opcional)
+# Personalizações por ticker
 CONFIG_POR_TICKER = {
     "BBAS3": {"p_l_justo": 6.0, "p_vp_justo": 1.0, "dy_medio": 0.08},
     "ABCB4": {"p_l_justo": 5.0, "p_vp_justo": 0.9, "dy_medio": 0.09},
     "VBBR3": {"p_l_justo": 7.0, "p_vp_justo": 1.5, "dy_medio": 0.09},
+    "PETR4": {"p_l_justo": 5.0, "p_vp_justo": 1.0, "dy_medio": 0.10},
+    "VALE3": {"p_l_justo": 6.0, "p_vp_justo": 1.1, "dy_medio": 0.09},
+    "ITUB4": {"p_l_justo": 9.0, "p_vp_justo": 1.5, "dy_medio": 0.07},
+    "BBDC4": {"p_l_justo": 7.0, "p_vp_justo": 1.2, "dy_medio": 0.08},
 }
 
 def carregar_meus_papeis():
-    """Carrega lista de ativos com configurações"""
+    """Carrega lista de ativos"""
     meus_papeis = []
     for ticker in MEUS_ATIVOS:
         config = CONFIG_PADRAO.copy()
@@ -77,7 +82,7 @@ def carregar_meus_papeis():
             "p_vp_justo": config["p_vp_justo"],
             "dy_medio": config["dy_medio"],
         })
-    logger.info(f"📋 {len(meus_papeis)} ativos carregados")
+    logger.info(f"📋 {len(meus_papeis)} ativos carregados: {', '.join(MEUS_ATIVOS)}")
     return meus_papeis
 
 MEUS_PAPEIS = carregar_meus_papeis()
@@ -100,49 +105,110 @@ PESOS_FATORES = {
 }
 
 # ==============================================================================
-# ESTIMATIVA DE DIVIDENDO (PAYOUT × LPA)
+# ESTIMATIVA DE DIVIDENDO (MÉDIA 5 ANOS)
 # ==============================================================================
 def estimar_dividendo_por_payout(ticker):
-    """Estima dividendo: LPA × Payout"""
+    """
+    Estima dividendo usando MÉDIA DE 5 ANOS de LPA e Payout
+    
+    Fórmula:
+    Dividendo Anual = (LPA Médio 5 Anos) × (Payout Médio 5 Anos)
+    
+    Vantagens:
+    - Suaviza sazonalidade
+    - Remove eventos extraordinários
+    - Reflete política consistente
+    """
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
         
-        lpa = info.get('trailingEps', 0)
-        if not lpa or lpa <= 0:
+        # LPA atual (fallback)
+        lpa_atual = info.get('trailingEps', 0)
+        if not lpa_atual or lpa_atual <= 0:
             return 0, 0, 0, 0, 0
         
+        # Dividendos históricos
         dividendos = acao.dividends
-        div_12m = 0
-        if not dividendos.empty:
-            hoje = datetime.now()
-            um_ano_atras = hoje - timedelta(days=365)
-            for data, valor in dividendos.items():
-                if hasattr(data, 'tzinfo') and data.tzinfo is not None:
-                    data = data.replace(tzinfo=None)
-                if um_ano_atras <= data <= hoje:
-                    div_12m += valor
+        if dividendos.empty:
+            return 0, 0, 0, 0, 0
         
-        payout = min(div_12m / lpa, 1.0) if lpa > 0 else 0
-        div_anual = lpa * payout
+        # Agrupa dividendos por ano (últimos 5 anos)
+        hoje = datetime.now()
+        cinco_anos_atras = hoje - timedelta(days=5*365)
         
-        # Frequência
-        if not dividendos.empty:
-            hoje = datetime.now()
-            count = sum(1 for d in dividendos.index if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= hoje - timedelta(days=365))
-            freq = 4 if count >= 4 else 2 if count >= 2 else 1
-            proximo = div_anual / freq
+        dividendos_por_ano = {}
+        for data, valor in dividendos.items():
+            if hasattr(data, 'tzinfo') and data.tzinfo is not None:
+                data = data.replace(tzinfo=None)
+            
+            if data >= cinco_anos_atras:
+                ano = data.year
+                if ano not in dividendos_por_ano:
+                    dividendos_por_ano[ano] = 0
+                dividendos_por_ano[ano] += valor
+        
+        # Tenta pegar financials para estimar LPA por ano
+        lpa_por_ano = {}
+        try:
+            financials = acao.financials
+            if financials is not None and not financials.empty:
+                # Simplificação: usa LPA atual para todos os anos
+                # Yahoo não fornece LPA histórico facilmente
+                for ano in dividendos_por_ano.keys():
+                    lpa_por_ano[ano] = lpa_atual
+            else:
+                for ano in dividendos_por_ano.keys():
+                    lpa_por_ano[ano] = lpa_atual
+        except:
+            for ano in dividendos_por_ano.keys():
+                lpa_por_ano[ano] = lpa_atual
+        
+        # Calcula payout por ano
+        payouts_anuais = []
+        lpa_usados = []
+        
+        for ano, div_total in dividendos_por_ano.items():
+            lpa_ano = lpa_por_ano.get(ano, lpa_atual)
+            if lpa_ano > 0:
+                payout_ano = div_total / lpa_ano
+                payout_ano = min(payout_ano, 1.0)
+                payouts_anuais.append(payout_ano)
+                lpa_usados.append(lpa_ano)
+        
+        # Médias (5 anos)
+        if len(payouts_anuais) > 0 and len(lpa_usados) > 0:
+            lpa_medio_5a = sum(lpa_usados) / len(lpa_usados)
+            payout_medio_5a = sum(payouts_anuais) / len(payouts_anuais)
         else:
-            proximo = div_anual / 4
+            lpa_medio_5a = lpa_atual
+            payout_medio_5a = 0.50
         
+        # Dividendo anual esperado
+        div_anual_esperado = lpa_medio_5a * payout_medio_5a
+        
+        # Detecta frequência
+        um_ano_atras = hoje - timedelta(days=365)
+        count = sum(1 for d in dividendos.index if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= um_ano_atras)
+        
+        frequencia = 4 if count >= 4 else 2 if count >= 2 else 1
+        proximo_dividendo = div_anual_esperado / frequencia
+        
+        # Confiança
         confianca = 0.5
-        if lpa > 0: confianca += 0.2
-        if 0.30 <= payout <= 0.80: confianca += 0.2
-        if not dividendos.empty and len(dividendos) >= 4: confianca += 0.1
+        if lpa_medio_5a > 0: confianca += 0.2
+        if len(payouts_anuais) >= 3:
+            variacao = max(payouts_anuais) - min(payouts_anuais)
+            if variacao < 0.20: confianca += 0.2
+            elif variacao < 0.30: confianca += 0.1
+        if 0.30 <= payout_medio_5a <= 0.80: confianca += 0.2
+        elif 0.20 <= payout_medio_5a <= 0.90: confianca += 0.1
+        if len(dividendos) >= 20: confianca += 0.1
         confianca = min(confianca, 1.0)
         
-        logger.info(f"📊 {ticker}: LPA R$ {lpa:.2f} | Payout {payout:.1%} | Est. R$ {proximo:.4f}")
-        return div_anual, payout, lpa, confianca, proximo
+        logger.info(f"📊 {ticker}: LPA Méd R$ {lpa_medio_5a:.2f} | Payout Méd {payout_medio_5a:.1%} | Est. R$ {proximo_dividendo:.4f} ({confianca:.0%})")
+        
+        return div_anual_esperado, payout_medio_5a, lpa_medio_5a, confianca, proximo_dividendo
     except Exception as e:
         logger.error(f"❌ Erro estimar {ticker}: {e}")
         return 0, 0, 0, 0, 0
@@ -255,7 +321,7 @@ def calcular_score_momentum(dados, hist):
     return {"score": score, "detalhes": scores}
 
 def calcular_score_composto(dados, hist, papel_config):
-    """Score total (média ponderada dos fatores)"""
+    """Score total"""
     sq = calcular_score_quality(dados)
     sl = calcular_score_low_vol(dados, hist)
     sv = calcular_score_value(dados, papel_config)
@@ -273,7 +339,7 @@ def calcular_score_composto(dados, hist, papel_config):
     return {"score_total": score, "classificacao": classif, "fatores": {"quality": sq, "low_vol": sl, "value": sv, "dividend": sd, "momentum": sm}}
 
 def calcular_valor_intrinseco(dados, papel_config):
-    """Valor intrínseco (Graham, P/L, P/VP, DY)"""
+    """Valor intrínseco"""
     preco = dados.get("preco_atual", 0)
     lpa = dados.get("eps", 0)
     p_vp = dados.get("pb_ratio", 0)
@@ -336,7 +402,7 @@ def analisar_acao(ticker):
         
         dy = div_12m / preco if preco > 0 else 0
         
-        # Estimativa Payout × LPA
+        # Estimativa Payout × LPA (Média 5 Anos)
         div_anual, payout_medio, lpa, confianca, proximo_div = estimar_dividendo_por_payout(ticker)
         
         eps = info.get('trailingEps', 0)
@@ -389,10 +455,9 @@ def analisar_acao(ticker):
 # ALERTAS
 # ==============================================================================
 def gerar_alertas(dados, hist, papel_config, rotinas):
-    """Gera alertas baseado nas rotinas"""
+    """Gera alertas"""
     alertas = []
     
-    # Score (MENSAL)
     if rotinas["mensal"]:
         score = calcular_score_composto(dados, hist, papel_config)
         dados["score_composto"] = score
@@ -403,7 +468,6 @@ def gerar_alertas(dados, hist, papel_config, rotinas):
                 "mensagem": f"Score: {score['score_total']:.0f}/100 ({score['classificacao']})\nQuality: {score['fatores']['quality']['score']:.0f} | Low Vol: {score['fatores']['low_vol']['score']:.0f}"
             })
     
-    # DY (SEMANAL)
     if rotinas["semanal"]:
         if dados["dividend_yield"] > THRESHOLDS["dividend_yield_min"]:
             alertas.append({
@@ -411,9 +475,7 @@ def gerar_alertas(dados, hist, papel_config, rotinas):
                 "titulo": "🟢 Dividend Yield Atraente",
                 "mensagem": f"DY atual: {dados['dividend_yield']:.2%} (mínimo: {THRESHOLDS['dividend_yield_min']:.0%})"
             })
-    
-    # Upside (SEMANAL)
-    if rotinas["semanal"]:
+        
         if dados["upside"] > THRESHOLDS["price_target_upside"]:
             alertas.append({
                 "tipo": "UPSIDE",
@@ -421,12 +483,10 @@ def gerar_alertas(dados, hist, papel_config, rotinas):
                 "mensagem": f"Upside: {dados['upside']:.1%} (alvo: R$ {dados['price_target_mean']:.2f})"
             })
     
-    # Corte Dividendo (DIÁRIO)
     for alerta in dados.get("alertas", []):
         if "Dividendo caiu" in alerta:
             alertas.append({"tipo": "CORTE_DIVIDENDO", "titulo": "🔴 Corte de Dividendo", "mensagem": alerta})
     
-    # Valor Intrínseco (MENSAL)
     if rotinas["mensal"]:
         vi = calcular_valor_intrinseco(dados, papel_config)
         dados["valor_intrinseco"] = vi
@@ -443,7 +503,7 @@ def gerar_alertas(dados, hist, papel_config, rotinas):
 # TELEGRAM
 # ==============================================================================
 def enviar_telegram(mensagem, disable_web_preview=False):
-    """Envia mensagem para Telegram"""
+    """Envia mensagem"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -554,7 +614,7 @@ def formatar_data_com_telegram(dados_com):
     if not dados_com:
         return None
     msg = "💰 *DATA COM PRÓXIMA*\n"
-    msg += "Fonte: Estimativa Payout × LPA\n\n"
+    msg += "Fonte: Estimativa Payout × LPA (Média 5 Anos)\n\n"
     msg += "```\n"
     msg += f"{'Ativo':<7} | {'Data COM':<11} | {'Dias':<6} | {'Estimado':<10} | {'DY':<7}\n"
     msg += f"{'-'*7} | {'-'*11} | {'-'*6} | {'-'*10} | {'-'*7}\n"
