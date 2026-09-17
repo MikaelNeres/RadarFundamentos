@@ -1,5 +1,5 @@
 """
-🤖 RADAR IDIV v13.0 - Monitoramento Fundamentalista
+🤖 RADAR IDIV v14.0 - Monitoramento Fundamentalista
 Foco: Dividendos, Data COM, Factor Investing
 Fontes: Yahoo Finance
 """
@@ -359,7 +359,7 @@ def main():
     """Função principal do bot"""
     
     logger.info("="*60)
-    logger.info(f"🤖 RADAR IDIV v13.0 - {len(MEUS_PAPEIS)} ativos")
+    logger.info(f"🤖 RADAR IDIV v14.0 - {len(MEUS_PAPEIS)} ativos")
     logger.info("="*60)
     
     # Envia mensagem de início
@@ -460,94 +460,100 @@ def main():
         enviar_telegram(alerta)
     
     # ==========================================================================
-    # ENVIA RESUMO DIÁRIO ÚNICO (COM TOP 10 SE FOR DIA)
+    # ENVIA RESUMO DIÁRIO (TOP 10 MAIS ATRAENTES)
     # ==========================================================================
     if todos_dados:
-        # Divide em grupos de 12 ativos
-        tamanho_grupo = 12
-        grupos = [todos_dados[i:i + tamanho_grupo] for i in range(0, len(todos_dados), tamanho_grupo)]
+        # Ordena por score (se tiver) ou por DY (se não tiver score)
+        if dados_com_score:
+            # Dias 1-3: usa score para ordenar
+            todos_ordenados = sorted(todos_dados, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)
+        else:
+            # Outros dias: usa DY para ordenar
+            todos_ordenados = sorted(todos_dados, key=lambda x: x.get('dividend_yield', 0), reverse=True)
         
-        for num_grupo, grupo in enumerate(grupos, 1):
-            msg = "📊 *RESUMO DIÁRIO*\n"
-            msg += hoje + f" ({num_grupo}/{len(grupos)})\n\n"
-            msg += "```\n"
-            msg += f"{'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'MM200':<8} | {'Status':<7}\n"
-            msg += f"{'-'*45}\n"
+        # Pega apenas Top 10 mais atraentes
+        top_10 = todos_ordenados[:10]
+        
+        msg = "📊 *RESUMO DIÁRIO*\n"
+        msg += hoje + "\n"
+        msg += "Top 10 Mais Atraentes\n\n"
+        msg += "```\n"
+        msg += f"{'#':<3} | {'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'MM200':<8} | {'Status':<7}\n"
+        msg += f"{'-'*50}\n"
+        
+        for i, d in enumerate(top_10, 1):
+            ticker = d.get('ticker', 'N/A')
+            preco = d.get('preco', 0)
+            dy = d.get('dividend_yield', 0)
+            distancia = d.get('distancia_media_200d', 0)
+            pe = d.get('pe_ratio', 0)
             
-            for d in sorted(grupo, key=lambda x: x.get('dividend_yield', 0), reverse=True):
+            # Ícone DY
+            if dy > 0.06:
+                icone = "🟢"
+            elif dy > 0.04:
+                icone = "🟡"
+            else:
+                icone = "🔴"
+            
+            # MM200 simplificada
+            dist_pct = distancia * 100
+            if distancia > 0.20:
+                mm200 = f"+{dist_pct:.0f}% 🔴"
+            elif distancia > 0:
+                mm200 = f"+{dist_pct:.0f}%"
+            elif distancia > -0.20:
+                mm200 = f"{dist_pct:.0f}%"
+            else:
+                mm200 = f"{dist_pct:.0f}% 🟢"
+            
+            # Status
+            if dy > 0.06 and pe < 8 and distancia < 0:
+                status = "🟢 Buy"
+            elif dy > 0.04:
+                status = "🟡 Hold"
+            else:
+                status = "🔴 Sell"
+            
+            msg += (
+                f"{i:<3} | "
+                f"{ticker:<7} | "
+                f"R$ {preco:>5.2f} | "
+                f"{dy*100:>6.1f}% {icone} | "
+                f"{mm200:<8} | "
+                f"{status:<7}\n"
+            )
+        
+        msg += "```\n"
+        
+        # Adiciona Top 10 Score apenas nos dias 1-3
+        if dados_com_score:
+            msg += "\n🏆 *TOP 10 SCORE*\n"
+            msg += "Do mais atrativo para o menos atrativo\n\n"
+            msg += "```\n"
+            msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Classif.':<12}\n"
+            msg += f"{'-'*32}\n"
+            
+            ranking = sorted(dados_com_score, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)[:10]
+            
+            for i, d in enumerate(ranking, 1):
                 ticker = d.get('ticker', 'N/A')
-                preco = d.get('preco', 0)
-                dy = d.get('dividend_yield', 0)
-                distancia = d.get('distancia_media_200d', 0)
-                pe = d.get('pe_ratio', 0)
-                
-                # Ícone DY
-                if dy > 0.06:
-                    icone = "🟢"
-                elif dy > 0.04:
-                    icone = "🟡"
-                else:
-                    icone = "🔴"
-                
-                # MM200 simplificada
-                dist_pct = distancia * 100
-                if distancia > 0.20:
-                    mm200 = f"+{dist_pct:.0f}% 🔴"
-                elif distancia > 0:
-                    mm200 = f"+{dist_pct:.0f}%"
-                elif distancia > -0.20:
-                    mm200 = f"{dist_pct:.0f}%"
-                else:
-                    mm200 = f"{dist_pct:.0f}% 🟢"
-                
-                # Status
-                if dy > 0.06 and pe < 8 and distancia < 0:
-                    status = "🟢 Buy"
-                elif dy > 0.04:
-                    status = "🟡 Hold"
-                else:
-                    status = "🔴 Sell"
+                score = d.get('score', {}).get('score_total', 0)
+                classif = d.get('score', {}).get('classificacao', 'N/A')[:12]
                 
                 msg += (
+                    f"{i:<3} | "
                     f"{ticker:<7} | "
-                    f"R$ {preco:>5.2f} | "
-                    f"{dy*100:>6.1f}% {icone} | "
-                    f"{mm200:<8} | "
-                    f"{status:<7}\n"
+                    f"{score:>5.0f} | "
+                    f"{classif:<12}\n"
                 )
             
             msg += "```\n"
-            
-            # Adiciona Top 10 apenas no primeiro grupo e se tiver score
-            if num_grupo == 1 and dados_com_score:
-                msg += "\n🏆 *TOP 10 SCORE*\n"
-                msg += "Do mais atrativo para o menos atrativo\n\n"
-                msg += "```\n"
-                msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Classif.':<12}\n"
-                msg += f"{'-'*32}\n"
-                
-                ranking = sorted(dados_com_score, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)[:10]
-                
-                for i, d in enumerate(ranking, 1):
-                    ticker = d.get('ticker', 'N/A')
-                    score = d.get('score', {}).get('score_total', 0)
-                    classif = d.get('score', {}).get('classificacao', 'N/A')[:12]
-                    
-                    msg += (
-                        f"{i:<3} | "
-                        f"{ticker:<7} | "
-                        f"{score:>5.0f} | "
-                        f"{classif:<12}\n"
-                    )
-                
-                msg += "```\n"
-                msg += "\n📊 Quality 30% | Low Vol 25% | Value 20% | Dividend 15% | Momentum 10%"
-            
-            if num_grupo == 1:
-                msg += "\n\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
-                msg += "\nMM200 = vs Média 200d | 🟢 Abaixo = Oportunidade"
-            
-            enviar_telegram(msg)
+            msg += "\n📊 Quality 30% | Low Vol 25% | Value 20% | Dividend 15% | Momentum 10%"
+        
+        msg += "\n\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
+        msg += "\nMM200 = vs Média 200d | 🟢 Abaixo = Oportunidade"
+        enviar_telegram(msg)
     
     # ==========================================================================
     # MENSAGEM FINAL
