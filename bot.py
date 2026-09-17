@@ -1,5 +1,5 @@
 """
-🤖 RADAR IDIV v12.0 - Monitoramento Fundamentalista
+🤖 RADAR IDIV v13.0 - Monitoramento Fundamentalista
 Foco: Dividendos, Data COM, Factor Investing
 Fontes: Yahoo Finance
 """
@@ -359,7 +359,7 @@ def main():
     """Função principal do bot"""
     
     logger.info("="*60)
-    logger.info(f"🤖 RADAR IDIV v12.0 - {len(MEUS_PAPEIS)} ativos")
+    logger.info(f"🤖 RADAR IDIV v13.0 - {len(MEUS_PAPEIS)} ativos")
     logger.info("="*60)
     
     # Envia mensagem de início
@@ -460,11 +460,11 @@ def main():
         enviar_telegram(alerta)
     
     # ==========================================================================
-    # ENVIA RESUMO DIÁRIO OTIMIZADO
+    # ENVIA RESUMO DIÁRIO ÚNICO (COM TOP 10 SE FOR DIA)
     # ==========================================================================
     if todos_dados:
-        # Divide em grupos de 15 ativos
-        tamanho_grupo = 15
+        # Divide em grupos de 12 ativos
+        tamanho_grupo = 12
         grupos = [todos_dados[i:i + tamanho_grupo] for i in range(0, len(todos_dados), tamanho_grupo)]
         
         for num_grupo, grupo in enumerate(grupos, 1):
@@ -518,41 +518,36 @@ def main():
             
             msg += "```\n"
             
+            # Adiciona Top 10 apenas no primeiro grupo e se tiver score
+            if num_grupo == 1 and dados_com_score:
+                msg += "\n🏆 *TOP 10 SCORE*\n"
+                msg += "Do mais atrativo para o menos atrativo\n\n"
+                msg += "```\n"
+                msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Classif.':<12}\n"
+                msg += f"{'-'*32}\n"
+                
+                ranking = sorted(dados_com_score, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)[:10]
+                
+                for i, d in enumerate(ranking, 1):
+                    ticker = d.get('ticker', 'N/A')
+                    score = d.get('score', {}).get('score_total', 0)
+                    classif = d.get('score', {}).get('classificacao', 'N/A')[:12]
+                    
+                    msg += (
+                        f"{i:<3} | "
+                        f"{ticker:<7} | "
+                        f"{score:>5.0f} | "
+                        f"{classif:<12}\n"
+                    )
+                
+                msg += "```\n"
+                msg += "\n📊 Quality 30% | Low Vol 25% | Value 20% | Dividend 15% | Momentum 10%"
+            
             if num_grupo == 1:
-                msg += "\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
+                msg += "\n\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
                 msg += "\nMM200 = vs Média 200d | 🟢 Abaixo = Oportunidade"
             
             enviar_telegram(msg)
-    
-    # ==========================================================================
-    # ENVIA TOP 10 SCORE (MENSAL - PRIMEIROS 3 DIAS)
-    # ==========================================================================
-    if dados_com_score:
-        msg = "🏆 *TOP 10 SCORE*\n"
-        msg += f"Referência: {hoje}\n"
-        msg += "Do mais atrativo para o menos atrativo\n\n"
-        msg += "```\n"
-        msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Classif.':<12}\n"
-        msg += f"{'-'*32}\n"
-        
-        # Ordena do maior score para o menor (mais atrativo → menos atrativo)
-        ranking = sorted(dados_com_score, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)[:10]
-        
-        for i, d in enumerate(ranking, 1):
-            ticker = d.get('ticker', 'N/A')
-            score = d.get('score', {}).get('score_total', 0)
-            classif = d.get('score', {}).get('classificacao', 'N/A')[:12]
-            
-            msg += (
-                f"{i:<3} | "
-                f"{ticker:<7} | "
-                f"{score:>5.0f} | "
-                f"{classif:<12}\n"
-            )
-        
-        msg += "```\n"
-        msg += "\n📊 Baseado em: Quality 30% | Low Vol 25% | Value 20% | Dividend 15% | Momentum 10%"
-        enviar_telegram(msg)
     
     # ==========================================================================
     # MENSAGEM FINAL
