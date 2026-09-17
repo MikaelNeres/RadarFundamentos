@@ -1,6 +1,6 @@
 """
-🤖 RADAR IDIV v14.0 - Monitoramento Fundamentalista
-Foco: Dividendos, Data COM, Factor Investing
+🤖 RADAR IDIV v15.0 - Monitoramento Fundamentalista
+Foco: Dividendos, Data COM, Factor Investing + DCF
 Fontes: Yahoo Finance
 """
 
@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
 CHAT_ID = '566929604'
+
+# ==============================================================================
+# CONFIGURAÇÕES DO DCF
+# ==============================================================================
+
+DCF_TAXA_DESCONTO = 0.13          # 13% ao ano
+DCF_CRESCIMENTO_PERPETUO = 0.03   # 3% ao ano
+DCF_ANOS_PROJECAO = 5             # 5 anos
 
 # ==============================================================================
 # SEUS ATIVOS (PERSONALIZE AQUI!)
@@ -205,6 +213,13 @@ def analisar_ativo(ticker):
         eps = info.get('trailingEps', 0)
         payout_ratio = min(div_12m / eps, 1.0) if eps > 0 else 0
         
+        # ==========================================================================
+        # FLUXO DE CAIXA (para DCF)
+        # ==========================================================================
+        fcf = info.get('freeCashflow', 0)
+        shares = info.get('sharesOutstanding', 0)
+        fcf_por_acao = fcf / shares if shares > 0 and fcf > 0 else 0
+        
         return {
             "ticker": ticker,
             "nome": info.get('longName', ticker),
@@ -228,11 +243,63 @@ def analisar_ativo(ticker):
             
             "media_200d": media_200d,
             "distancia_media_200d": distancia_media_200d,
+            
+            "fcf_por_acao": fcf_por_acao,
         }
     
     except Exception as e:
         logger.error(f"❌ Erro analisar {ticker}: {e}")
         return None
+
+# ==============================================================================
+# FUNÇÕES DE DCF
+# ==============================================================================
+
+def calcular_dcf(dados, taxa_desconto=DCF_TAXA_DESCONTO, crescimento_perpetuo=DCF_CRESCIMENTO_PERPETUO):
+    """
+    Calcula preço justo por DCF (Discounted Cash Flow)
+    
+    Fórmula:
+    P. Justo = Σ(FCF_t / (1+r)^t) + Valor Terminal / (1+r)^n
+    
+    Onde:
+    - FCF_t = Free Cash Flow no ano t
+    - r = taxa de desconto
+    - Valor Terminal = FCF_n × (1+g) / (r-g)
+    - g = crescimento perpétuo
+    """
+    try:
+        fcf_atual = dados.get('fcf_por_acao', 0)
+        
+        if fcf_atual <= 0:
+            return 0
+        
+        # Crescimento estimado (baseado no crescimento de receita)
+        cresc = dados.get('crescimento', 0.05)
+        cresc = min(cresc, 0.15)  # Limita a 15%
+        cresc = max(cresc, 0.02)  # Mínimo 2%
+        
+        # Projeta FCF para os próximos 5 anos
+        valor_presente = 0
+        fcf_ano = fcf_atual
+        
+        for ano in range(1, DCF_ANOS_PROJECAO + 1):
+            fcf_ano = fcf_ano * (1 + cresc)
+            vp = fcf_ano / ((1 + taxa_desconto) ** ano)
+            valor_presente += vp
+        
+        # Valor Terminal (perpétuo)
+        fcf_terminal = fcf_ano * (1 + crescimento_perpetuo)
+        valor_terminal = fcf_terminal / (taxa_desconto - crescimento_perpetuo)
+        vp_terminal = valor_terminal / ((1 + taxa_desconto) ** DCF_ANOS_PROJECAO)
+        
+        preco_justo = valor_presente + vp_terminal
+        
+        return preco_justo
+    
+    except Exception as e:
+        logger.error(f"❌ Erro DCF: {e}")
+        return 0
 
 # ==============================================================================
 # FUNÇÕES DE FACTOR INVESTING
@@ -359,11 +426,13 @@ def main():
     """Função principal do bot"""
     
     logger.info("="*60)
-    logger.info(f"🤖 RADAR IDIV v14.0 - {len(MEUS_PAPEIS)} ativos")
+    logger.info(f"🤖 RADAR IDIV v15.0 - {len(MEUS_PAPEIS)} ativos")
     logger.info("="*60)
     
     # Envia mensagem de início
     hoje = datetime.now().strftime("%d/%m/%Y")
+    hoje_dia = datetime.now().day
+    
     enviar_telegram(
         f"🤖 *Radar IDIV | {hoje}*\n"
         f"Iniciando monitoramento de {len(MEUS_PAPEIS)} ativos..."
@@ -377,10 +446,10 @@ def main():
     
     # Verifica rotinas
     hoje_semana = datetime.now().weekday()
-    hoje_dia = datetime.now().day
     
     e_segunda = hoje_semana == 0
     e_primeiro_dia = hoje_dia <= 3
+    e_dia_15 = hoje_dia == 15
     
     # ==========================================================================
     # LOOP PRINCIPAL
@@ -429,6 +498,12 @@ def main():
                 f"Dividend Yield: {dados['dividend_yield']:.2%}"
             )
         
+        # Calcula DCF (se for dia 15)
+        if e_dia_15:
+            preco_justo = calcular_dcf(dados)
+            dados['preco_justo'] = preco_justo
+            dados['upside_dcf'] = (preco_justo - dados['preco']) / dados['preco'] if dados['preco'] > 0 else 0
+        
         todos_dados.append(dados)
     
     # ==========================================================================
@@ -465,10 +540,8 @@ def main():
     if todos_dados:
         # Ordena por score (se tiver) ou por DY (se não tiver score)
         if dados_com_score:
-            # Dias 1-3: usa score para ordenar
             todos_ordenados = sorted(todos_dados, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)
         else:
-            # Outros dias: usa DY para ordenar
             todos_ordenados = sorted(todos_dados, key=lambda x: x.get('dividend_yield', 0), reverse=True)
         
         # Pega apenas Top 10 mais atraentes
@@ -556,6 +629,58 @@ def main():
         enviar_telegram(msg)
     
     # ==========================================================================
+    # ENVIA TOP 10 OPORTUNIDADES (DIA 15)
+    # ==========================================================================
+    if e_dia_15 and todos_dados:
+        # Filtra ativos com upside > 10%
+        oportunidades = [d for d in todos_dados if d.get('upside_dcf', 0) > 0.10]
+        
+        # Ordena por maior upside
+        oportunidades_ordenadas = sorted(oportunidades, key=lambda x: x.get('upside_dcf', 0), reverse=True)[:10]
+        
+        if oportunidades_ordenadas:
+            msg = "💎 *TOP 10 MAIORES OPORTUNIDADES*\n"
+            msg += f"{hoje}\n"
+            msg += f"Baseado em DCF (Taxa: {DCF_TAXA_DESCONTO*100:.0f}% a.a.)\n\n"
+            msg += "```\n"
+            msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Preço':<9} | {'P. Justo':<10} | {'Upside':<8} | {'Status':<12}\n"
+            msg += f"{'-'*65}\n"
+            
+            for i, d in enumerate(oportunidades_ordenadas, 1):
+                ticker = d.get('ticker', 'N/A')
+                score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
+                preco = d.get('preco', 0)
+                preco_justo = d.get('preco_justo', 0)
+                upside = d.get('upside_dcf', 0)
+                dy = d.get('dividend_yield', 0)
+                
+                # Status baseado no upside
+                if upside > 0.40:
+                    status = "🟢 Strong Buy"
+                elif upside > 0.20:
+                    status = "🟢 Buy"
+                elif upside > 0.10:
+                    status = "🟡 Hold"
+                else:
+                    status = "🔴 Acompanhar"
+                
+                msg += (
+                    f"{i:<3} | "
+                    f"{ticker:<7} | "
+                    f"{score:>5.0f} | "
+                    f"R$ {preco:>6.2f} | "
+                    f"R$ {preco_justo:>7.2f} | "
+                    f"+{upside*100:>6.1f}% | "
+                    f"{status:<12}\n"
+                )
+            
+            msg += "```\n"
+            msg += "\n📊 Score = Factor Investing (0-100)"
+            msg += f"\n💰 P. Justo = DCF {DCF_TAXA_DESCONTO*100:.0f}% a.a."
+            msg += "\n📈 Upside = (P. Justo - Preço) / Preço"
+            enviar_telegram(msg)
+    
+    # ==========================================================================
     # MENSAGEM FINAL
     # ==========================================================================
     enviar_telegram(
@@ -563,7 +688,8 @@ def main():
         f"📊 Ativos analisados: {len(todos_dados)}\n"
         f"💰 Data COM: {len(dados_data_com)}\n"
         f"📈 Alertas: {len(alertas)}\n"
-        f"🏆 Ranking: {'✅' if dados_com_score else '❌ (apenas dias 1-3)'}"
+        f"🏆 Ranking: {'✅' if dados_com_score else '❌ (apenas dias 1-3)'}\n"
+        f"💎 Oportunidades: {'✅' if e_dia_15 else '❌ (apenas dia 15)'}"
     )
     
     logger.info(f"✅ Fim: {len(alertas)} alertas enviados")
