@@ -628,3 +628,43 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # No final do código, após main():
+
+def verificar_comandos():
+    """
+    Verifica comandos do Telegram a cada 30 segundos
+    """
+    ultimo_update = 0
+    
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+            params = {"offset": ultimo_update, "timeout": 30}
+            
+            response = requests.get(url, json=params, timeout=30)
+            updates = response.json().get('result', [])
+            
+            for update in updates:
+                ultimo_update = update['update_id'] + 1
+                
+                if 'message' in update and 'text' in update['message']:
+                    chat_id = update['message']['chat']['id']
+                    texto = update['message']['text']
+                    
+                    if texto == '/resumo' and chat_id == CHAT_ID:
+                        processar_comando_resumo()
+        
+        except Exception as e:
+            logger.error(f"❌ Erro polling: {e}")
+        
+        time.sleep(30)
+
+# Adicionar no final:
+import time
+
+if __name__ == "__main__":
+    # Roda main() uma vez
+    main()
+    
+    # Depois fica verificando comandos
+    verificar_comandos()
