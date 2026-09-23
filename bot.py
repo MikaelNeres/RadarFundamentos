@@ -1,6 +1,6 @@
 """
-🤖 RADAR IDIV v15.0 - Monitoramento Fundamentalista
-Foco: Dividendos, Data COM, Factor Investing + DCF
+🤖 RADAR IDIV v16.0 - Monitoramento Fundamentalista
+Foco: Earnings Yield, Upside DCF, Factor Investing
 Fontes: Yahoo Finance
 """
 
@@ -166,7 +166,7 @@ def estimar_dividendo(ticker):
 # ==============================================================================
 
 def analisar_ativo(ticker):
-    """Analisa ativo com MM200"""
+    """Analisa ativo com Earnings Yield e DCF"""
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
@@ -174,7 +174,7 @@ def analisar_ativo(ticker):
         preco = info.get('currentPrice', info.get('regularMarketPrice', 0))
         
         # ==========================================================================
-        # DIVIDENDOS ATUAIS
+        # DADOS BÁSICOS
         # ==========================================================================
         dividendos = acao.dividends
         doze_meses = datetime.now() - timedelta(days=365)
@@ -185,6 +185,12 @@ def analisar_ativo(ticker):
         ) if not dividendos.empty else 0
         
         dy = div_12m / preco if preco > 0 else 0
+        
+        # ==========================================================================
+        # EARNINGS YIELD (E/P)
+        # ==========================================================================
+        lpa = info.get('trailingEps', 0)
+        earnings_yield = lpa / preco if preco > 0 and lpa > 0 else 0
         
         # ==========================================================================
         # MÉDIA 200 DIAS
@@ -245,6 +251,7 @@ def analisar_ativo(ticker):
             "distancia_media_200d": distancia_media_200d,
             
             "fcf_por_acao": fcf_por_acao,
+            "earnings_yield": earnings_yield,
         }
     
     except Exception as e:
@@ -256,28 +263,17 @@ def analisar_ativo(ticker):
 # ==============================================================================
 
 def calcular_dcf(dados, taxa_desconto=DCF_TAXA_DESCONTO, crescimento_perpetuo=DCF_CRESCIMENTO_PERPETUO):
-    """
-    Calcula preço justo por DCF (Discounted Cash Flow)
-    
-    Fórmula:
-    P. Justo = Σ(FCF_t / (1+r)^t) + Valor Terminal / (1+r)^n
-    
-    Onde:
-    - FCF_t = Free Cash Flow no ano t
-    - r = taxa de desconto
-    - Valor Terminal = FCF_n × (1+g) / (r-g)
-    - g = crescimento perpétuo
-    """
+    """Calcula preço justo por DCF"""
     try:
         fcf_atual = dados.get('fcf_por_acao', 0)
         
         if fcf_atual <= 0:
             return 0
         
-        # Crescimento estimado (baseado no crescimento de receita)
+        # Crescimento estimado
         cresc = dados.get('crescimento', 0.05)
-        cresc = min(cresc, 0.15)  # Limita a 15%
-        cresc = max(cresc, 0.02)  # Mínimo 2%
+        cresc = min(cresc, 0.15)
+        cresc = max(cresc, 0.02)
         
         # Projeta FCF para os próximos 5 anos
         valor_presente = 0
@@ -288,7 +284,7 @@ def calcular_dcf(dados, taxa_desconto=DCF_TAXA_DESCONTO, crescimento_perpetuo=DC
             vp = fcf_ano / ((1 + taxa_desconto) ** ano)
             valor_presente += vp
         
-        # Valor Terminal (perpétuo)
+        # Valor Terminal
         fcf_terminal = fcf_ano * (1 + crescimento_perpetuo)
         valor_terminal = fcf_terminal / (taxa_desconto - crescimento_perpetuo)
         vp_terminal = valor_terminal / ((1 + taxa_desconto) ** DCF_ANOS_PROJECAO)
@@ -419,6 +415,21 @@ def calcular_score(dados, historico, config):
     }
 
 # ==============================================================================
+# FUNÇÃO PARA DEFINIR STATUS
+# ==============================================================================
+
+def definir_status(earnings_yield, upside):
+    """Define status baseado em E/Y e Upside"""
+    if earnings_yield > 0.15 and upside > 0.30:
+        return "🟢"  # Strong Buy
+    elif earnings_yield > 0.12 and upside > 0.20:
+        return "🟢"  # Buy
+    elif earnings_yield > 0.08 and upside > 0.10:
+        return "🟡"  # Hold
+    else:
+        return "🔴"  # Sell
+
+# ==============================================================================
 # FUNÇÃO PRINCIPAL
 # ==============================================================================
 
@@ -426,12 +437,18 @@ def main():
     """Função principal do bot"""
     
     logger.info("="*60)
-    logger.info(f"🤖 RADAR IDIV v15.0 - {len(MEUS_PAPEIS)} ativos")
+    logger.info(f"🤖 RADAR IDIV v16.0 - {len(MEUS_PAPEIS)} ativos")
     logger.info("="*60)
     
     # Envia mensagem de início
     hoje = datetime.now().strftime("%d/%m/%Y")
     hoje_dia = datetime.now().day
+    hoje_semana = datetime.now().weekday()
+    
+    # Verifica se é dia útil (segunda a sexta)
+    if hoje_semana >= 5:  # Sábado (5) ou Domingo (6)
+        logger.info("⚠️ Fim de semana - sem monitoramento")
+        return
     
     enviar_telegram(
         f"🤖 *Radar IDIV | {hoje}*\n"
@@ -441,14 +458,10 @@ def main():
     # Listas para acumular dados
     todos_dados = []
     dados_data_com = []
-    alertas = []
     dados_com_score = []
     
     # Verifica rotinas
-    hoje_semana = datetime.now().weekday()
-    
     e_segunda = hoje_semana == 0
-    e_primeiro_dia = hoje_dia <= 3
     e_dia_15 = hoje_dia == 15
     
     # ==========================================================================
@@ -479,26 +492,13 @@ def main():
                     "dias": dias
                 })
         
-        # Score (mensal - primeiros 3 dias)
-        if e_primeiro_dia:
+        # Score (apenas segundas-feiras)
+        if e_segunda:
             score = calcular_score(dados, historico, papel)
             dados["score"] = score
             dados_com_score.append({**dados, "score": score})
-            
-            if score["score_total"] >= 70:
-                alertas.append(
-                    f"🟢 *SCORE ALTO - {ticker}*\n"
-                    f"Score: {score['score_total']:.0f}/100 ({score['classificacao']})"
-                )
         
-        # Alerta DY (semanal - segundas)
-        if e_segunda and dados["dividend_yield"] > 0.06:
-            alertas.append(
-                f"🟢 *DY ATRAENTE - {ticker}*\n"
-                f"Dividend Yield: {dados['dividend_yield']:.2%}"
-            )
-        
-        # Calcula DCF (se for dia 15)
+        # Calcula DCF (apenas dia 15)
         if e_dia_15:
             preco_justo = calcular_dcf(dados)
             dados['preco_justo'] = preco_justo
@@ -507,19 +507,19 @@ def main():
         todos_dados.append(dados)
     
     # ==========================================================================
-    # ENVIA TABELA DATA COM (DIARIAMENTE)
+    # ENVIA TABELA DATA COM (QUANDO TIVER)
     # ==========================================================================
     if dados_data_com:
-        msg = "💰 *DATA COM PRÓXIMA*\n"
-        msg += "Fonte: Estimativa Payout × LPA\n\n"
+        msg = "💰 *DATA COM*\n"
+        msg += f"{hoje}\n\n"
         msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Data COM':<11} | {'Dias':<6} | {'Estimado':<10} | {'DY':<7}\n"
-        msg += f"{'-'*47}\n"
+        msg += f"{'Ativo':<7} | {'Data':<8} | {'Dias':<6} | {'Est. Div':<10} | {'DY':<7}\n"
+        msg += f"{'-'*45}\n"
         
         for d in sorted(dados_data_com, key=lambda x: x["dias"]):
             msg += (
                 f"{d['ticker']:<7} | "
-                f"{d['data_com']:<11} | "
+                f"{d['data_com']:<8} | "
                 f"{d['dias']:>5}  | "
                 f"R$ {d['proximo_dividendo']:>6.4f} | "
                 f"{d['dividend_yield']:>6.2%}\n"
@@ -529,103 +529,44 @@ def main():
         enviar_telegram(msg)
     
     # ==========================================================================
-    # ENVIA ALERTAS
+    # ENVIA RESUMO SEMANAL (SEGUNDAS-FEIRAS)
     # ==========================================================================
-    for alerta in alertas:
-        enviar_telegram(alerta)
-    
-    # ==========================================================================
-    # ENVIA RESUMO DIÁRIO (TOP 10 MAIS ATRAENTES)
-    # ==========================================================================
-    if todos_dados:
-        # Ordena por score (se tiver) ou por DY (se não tiver score)
-        if dados_com_score:
-            todos_ordenados = sorted(todos_dados, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)
-        else:
-            todos_ordenados = sorted(todos_dados, key=lambda x: x.get('dividend_yield', 0), reverse=True)
+    if e_segunda and todos_dados:
+        # Ordena por Earnings Yield + Upside
+        todos_ordenados = sorted(
+            todos_dados,
+            key=lambda x: (x.get('earnings_yield', 0) + x.get('upside_dcf', 0)),
+            reverse=True
+        )[:10]
         
-        # Pega apenas Top 10 mais atraentes
-        top_10 = todos_ordenados[:10]
-        
-        msg = "📊 *RESUMO DIÁRIO*\n"
-        msg += hoje + "\n"
-        msg += "Top 10 Mais Atraentes\n\n"
+        msg = "📊 *RESUMO SEMANAL*\n"
+        msg += f"{hoje}\n\n"
+        msg += "Top 10 por Earnings Yield + Upside\n\n"
         msg += "```\n"
-        msg += f"{'#':<3} | {'Ativo':<7} | {'Preço':<8} | {'DY':<7} | {'MM200':<8} | {'Status':<7}\n"
+        msg += f"{'#':<3} | {'Ativo':<7} | {'E/Y':<8} | {'Upside':<9} | {'Score':<6} | {'Status':<6}\n"
         msg += f"{'-'*50}\n"
         
-        for i, d in enumerate(top_10, 1):
+        for i, d in enumerate(todos_ordenados, 1):
             ticker = d.get('ticker', 'N/A')
-            preco = d.get('preco', 0)
-            dy = d.get('dividend_yield', 0)
-            distancia = d.get('distancia_media_200d', 0)
-            pe = d.get('pe_ratio', 0)
-            
-            # Ícone DY
-            if dy > 0.06:
-                icone = "🟢"
-            elif dy > 0.04:
-                icone = "🟡"
-            else:
-                icone = "🔴"
-            
-            # MM200 simplificada
-            dist_pct = distancia * 100
-            if distancia > 0.20:
-                mm200 = f"+{dist_pct:.0f}% 🔴"
-            elif distancia > 0:
-                mm200 = f"+{dist_pct:.0f}%"
-            elif distancia > -0.20:
-                mm200 = f"{dist_pct:.0f}%"
-            else:
-                mm200 = f"{dist_pct:.0f}% 🟢"
-            
-            # Status
-            if dy > 0.06 and pe < 8 and distancia < 0:
-                status = "🟢 Buy"
-            elif dy > 0.04:
-                status = "🟡 Hold"
-            else:
-                status = "🔴 Sell"
+            ey = d.get('earnings_yield', 0)
+            upside = d.get('upside_dcf', 0) if e_dia_15 else d.get('upside', 0)
+            score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
+            status = definir_status(ey, upside)
             
             msg += (
                 f"{i:<3} | "
                 f"{ticker:<7} | "
-                f"R$ {preco:>5.2f} | "
-                f"{dy*100:>6.1f}% {icone} | "
-                f"{mm200:<8} | "
-                f"{status:<7}\n"
+                f"{ey*100:>6.1f}%  | "
+                f"+{upside*100:>6.1f}% | "
+                f"{score:>5.0f} | "
+                f"{status:<6}\n"
             )
         
         msg += "```\n"
-        
-        # Adiciona Top 10 Score apenas nos dias 1-3
-        if dados_com_score:
-            msg += "\n🏆 *TOP 10 SCORE*\n"
-            msg += "Do mais atrativo para o menos atrativo\n\n"
-            msg += "```\n"
-            msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Classif.':<12}\n"
-            msg += f"{'-'*32}\n"
-            
-            ranking = sorted(dados_com_score, key=lambda x: x.get('score', {}).get('score_total', 0), reverse=True)[:10]
-            
-            for i, d in enumerate(ranking, 1):
-                ticker = d.get('ticker', 'N/A')
-                score = d.get('score', {}).get('score_total', 0)
-                classif = d.get('score', {}).get('classificacao', 'N/A')[:12]
-                
-                msg += (
-                    f"{i:<3} | "
-                    f"{ticker:<7} | "
-                    f"{score:>5.0f} | "
-                    f"{classif:<12}\n"
-                )
-            
-            msg += "```\n"
-            msg += "\n📊 Quality 30% | Low Vol 25% | Value 20% | Dividend 15% | Momentum 10%"
-        
-        msg += "\n\n🟢 DY > 6%  |  🟡 DY 4-6%  |  🔴 DY < 4%"
-        msg += "\nMM200 = vs Média 200d | 🟢 Abaixo = Oportunidade"
+        msg += "\n🟢 Strong Buy: E/Y > 15% + Upside > 30%"
+        msg += "\n🟢 Buy: E/Y > 12% + Upside > 20%"
+        msg += "\n🟡 Hold: E/Y > 8% + Upside > 10%"
+        msg += "\n🔴 Sell: E/Y < 8% OU Upside < 10%"
         enviar_telegram(msg)
     
     # ==========================================================================
@@ -639,60 +580,47 @@ def main():
         oportunidades_ordenadas = sorted(oportunidades, key=lambda x: x.get('upside_dcf', 0), reverse=True)[:10]
         
         if oportunidades_ordenadas:
-            msg = "💎 *TOP 10 MAIORES OPORTUNIDADES*\n"
-            msg += f"{hoje}\n"
-            msg += f"Baseado em DCF (Taxa: {DCF_TAXA_DESCONTO*100:.0f}% a.a.)\n\n"
+            msg = "💎 *TOP 10 OPORTUNIDADES*\n"
+            msg += f"{hoje} | DCF {DCF_TAXA_DESCONTO*100:.0f}% a.a.\n\n"
             msg += "```\n"
-            msg += f"{'#':<3} | {'Ativo':<7} | {'Score':<6} | {'Preço':<9} | {'P. Justo':<10} | {'Upside':<8} | {'Status':<12}\n"
-            msg += f"{'-'*65}\n"
+            msg += f"{'#':<3} | {'Ativo':<7} | {'Upside':<9} | {'E/Y':<8} | {'Score':<6} | {'Status':<6}\n"
+            msg += f"{'-'*50}\n"
             
             for i, d in enumerate(oportunidades_ordenadas, 1):
                 ticker = d.get('ticker', 'N/A')
-                score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
-                preco = d.get('preco', 0)
-                preco_justo = d.get('preco_justo', 0)
                 upside = d.get('upside_dcf', 0)
-                dy = d.get('dividend_yield', 0)
-                
-                # Status baseado no upside
-                if upside > 0.40:
-                    status = "🟢 Strong Buy"
-                elif upside > 0.20:
-                    status = "🟢 Buy"
-                elif upside > 0.10:
-                    status = "🟡 Hold"
-                else:
-                    status = "🔴 Acompanhar"
+                ey = d.get('earnings_yield', 0)
+                score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
+                status = definir_status(ey, upside)
                 
                 msg += (
                     f"{i:<3} | "
                     f"{ticker:<7} | "
-                    f"{score:>5.0f} | "
-                    f"R$ {preco:>6.2f} | "
-                    f"R$ {preco_justo:>7.2f} | "
                     f"+{upside*100:>6.1f}% | "
-                    f"{status:<12}\n"
+                    f"{ey*100:>6.1f}%  | "
+                    f"{score:>5.0f} | "
+                    f"{status:<6}\n"
                 )
             
             msg += "```\n"
-            msg += "\n📊 Score = Factor Investing (0-100)"
-            msg += f"\n💰 P. Justo = DCF {DCF_TAXA_DESCONTO*100:.0f}% a.a."
-            msg += "\n📈 Upside = (P. Justo - Preço) / Preço"
+            msg += "\n🟢 Strong Buy: E/Y > 15% + Upside > 30%"
+            msg += "\n🟢 Buy: E/Y > 12% + Upside > 20%"
+            msg += "\n🟡 Hold: E/Y > 8% + Upside > 10%"
+            msg += "\n🔴 Sell: E/Y < 8% OU Upside < 10%"
             enviar_telegram(msg)
     
     # ==========================================================================
     # MENSAGEM FINAL
     # ==========================================================================
-    enviar_telegram(
-        f"✅ *Monitoramento Concluído!*\n\n"
-        f"📊 Ativos analisados: {len(todos_dados)}\n"
-        f"💰 Data COM: {len(dados_data_com)}\n"
-        f"📈 Alertas: {len(alertas)}\n"
-        f"🏆 Ranking: {'✅' if dados_com_score else '❌ (apenas dias 1-3)'}\n"
-        f"💎 Oportunidades: {'✅' if e_dia_15 else '❌ (apenas dia 15)'}"
-    )
+    msg_final = f"✅ *Monitoramento Concluído!*\n\n"
+    msg_final += f"📊 Ativos analisados: {len(todos_dados)}\n"
+    msg_final += f"💰 Data COM: {len(dados_data_com)}\n"
+    msg_final += f"🏆 Ranking: {'✅' if dados_com_score else '❌ (apenas segundas)'}\n"
+    msg_final += f"💎 Oportunidades: {'✅' if e_dia_15 else '❌ (apenas dia 15)'}"
     
-    logger.info(f"✅ Fim: {len(alertas)} alertas enviados")
+    enviar_telegram(msg_final)
+    
+    logger.info(f"✅ Fim: monitoramento concluído")
 
 # ==============================================================================
 # EXECUTA
