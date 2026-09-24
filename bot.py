@@ -1,630 +1,176 @@
 """
-🤖 RADAR IDIV v16.0 - Monitoramento Fundamentalista
-Foco: Earnings Yield, Upside DCF, Factor Investing
-Fontes: Yahoo Finance
+🤖 RADAR IDIV v19.0 - Monitoramento Fundamentalista
+Foco: E/Y + Upside + Payout (simplificado)
 """
 
-# ==============================================================================
-# IMPORTS
-# ==============================================================================
-
-import yfinance as yf
-import requests
-import logging
-import pandas as pd
-import numpy as np
+import yfinance as yf, requests, logging, pandas as pd, numpy as np
 from datetime import datetime, timedelta
 
-# Configuração de logs
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# CONFIGURAÇÕES DO TELEGRAM
-# ==============================================================================
-
-TOKEN = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE'
-CHAT_ID = '566929604'
+TOKEN, CHAT_ID = '8734276492:AAGR92m7XYBWo_Ac5SHvbVBQL9K40ErIsrE', '566929604'
 
 # ==============================================================================
-# CONFIGURAÇÕES DO DCF
-# ==============================================================================
-
-DCF_TAXA_DESCONTO = 0.13          # 13% ao ano
-DCF_CRESCIMENTO_PERPETUO = 0.03   # 3% ao ano
-DCF_ANOS_PROJECAO = 5             # 5 anos
-
-# ==============================================================================
-# SEUS ATIVOS (PERSONALIZE AQUI!)
+# SEUS ATIVOS (35)
 # ==============================================================================
 
 MEUS_ATIVOS = [
     "CMIG4", "BBAS3", "SAPR11", "ISAE4", "ABCB4", "LOGG3", "FIQE3", "GGBR4",
     "VBBR3", "SAUD3", "DEXP3", "ITSA4", "PETR4", "BBSE3", "ITUB4", "BBDC4",
     "CPLE3", "VALE3", "CSMG3", "TIMS3", "VIVT3", "CXSE3", "KLBN11", "TAEE11",
-    "EGIE3", "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3", "PASS3", "PSSA3", "RANI3", "KLBN4"
+    "EGIE3", "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3", "PASS3",
+    "PSSA3", "RANI3", "KLBN4"
 ]
 
-# ==============================================================================
-# CONFIGURAÇÕES DE VALOR JUSTO
-# ==============================================================================
-
-CONFIG_PADRAO = {
-    "p_l_justo": 8.0,
-    "p_vp_justo": 1.2,
-    "dy_medio": 0.06
+# Configurações P/L justo por ativo
+CONFIG = {
+    "BBAS3":{"p_l":6.0}, "ABCB4":{"p_l":5.0}, "VBBR3":{"p_l":7.0},
+    "PETR4":{"p_l":5.0}, "VALE3":{"p_l":6.0}, "ITUB4":{"p_l":9.0},
+    "BBDC4":{"p_l":7.0}, "CMIG4":{"p_l":7.0}, "TAEE11":{"p_l":10.0},
+    "CPLE3":{"p_l":8.0}, "CPFE3":{"p_l":9.0}, "EGIE3":{"p_l":10.0}
 }
-
-CONFIG_POR_TICKER = {
-    "BBAS3": {"p_l_justo": 6.0, "p_vp_justo": 1.0, "dy_medio": 0.08},
-    "ABCB4": {"p_l_justo": 5.0, "p_vp_justo": 0.9, "dy_medio": 0.09},
-    "VBBR3": {"p_l_justo": 7.0, "p_vp_justo": 1.5, "dy_medio": 0.09},
-    "PETR4": {"p_l_justo": 5.0, "p_vp_justo": 1.0, "dy_medio": 0.10},
-    "VALE3": {"p_l_justo": 6.0, "p_vp_justo": 1.1, "dy_medio": 0.09},
-    "ITUB4": {"p_l_justo": 9.0, "p_vp_justo": 1.5, "dy_medio": 0.07},
-    "BBDC4": {"p_l_justo": 7.0, "p_vp_justo": 1.2, "dy_medio": 0.08}
-}
-
-# Cria lista de ativos com configurações
-MEUS_PAPEIS = []
-for ticker in MEUS_ATIVOS:
-    config = CONFIG_PADRAO.copy()
-    if ticker in CONFIG_POR_TICKER:
-        config.update(CONFIG_POR_TICKER[ticker])
-    MEUS_PAPEIS.append({
-        "ticker": ticker,
-        "nome": ticker,
-        **config
-    })
+PADRAO = {"p_l":8.0}
 
 # ==============================================================================
-# FUNÇÕES DE COMUNICAÇÃO
+# FUNÇÕES BÁSICAS
 # ==============================================================================
 
-def enviar_telegram(msg):
-    """Envia mensagem para o Telegram"""
-    try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        dados = {
-            "chat_id": CHAT_ID,
-            "text": msg,
-            "parse_mode": "Markdown"
-        }
-        resposta = requests.post(url, json=dados, timeout=15)
-        return resposta.status_code == 200
-    
-    except Exception as e:
-        logger.error(f"❌ Erro Telegram: {e}")
-        return False
+def enviar(msg):
+    try: return requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", json={"chat_id":CHAT_ID,"text":msg,"parse_mode":"Markdown"}, timeout=15).status_code==200
+    except: return False
 
-# ==============================================================================
-# FUNÇÕES DE DIVIDENDOS
-# ==============================================================================
-
-def estimar_dividendo(ticker):
-    """Estima próximo dividendo baseado na média dos últimos 5 anos"""
+def analisar(ticker):
     try:
         acao = yf.Ticker(f"{ticker}.SA")
-        dividendos = acao.dividends
-        
-        if dividendos.empty:
-            return 0, 0, 0, 0, 0
-        
-        hoje = datetime.now()
-        cinco_anos = hoje - timedelta(days=5*365)
-        
-        div_por_ano = {}
-        for data, valor in dividendos.items():
-            if hasattr(data, 'tzinfo'):
-                data = data.replace(tzinfo=None)
-            if data >= cinco_anos:
-                ano = data.year
-                div_por_ano[ano] = div_por_ano.get(ano, 0) + valor
-        
         info = acao.info
-        lpa = info.get('trailingEps', 0)
+        preco = info.get('currentPrice',0)
+        lpa = info.get('trailingEps',0)
+        ey = lpa/preco if preco>0 and lpa>0 else 0
         
-        if lpa <= 0:
-            return 0, 0, 0, 0, 0
+        pe = info.get('trailingPE',0)
+        pe_justo = CONFIG.get(ticker,PADRAO).get('p_l',8.0)
+        upside = (pe_justo-pe)/pe if pe>0 else 0
         
-        payouts = [div / lpa for div in div_por_ano.values()]
-        payout_medio = sum(payouts) / len(payouts) if payouts else 0.5
-        payout_medio = min(payout_medio, 1.0)
+        divs = acao.dividends
+        doze_meses = datetime.now()-timedelta(days=365)
+        div_12m = sum(v for d,v in divs.items() if (d.replace(tzinfo=None) if hasattr(d,'tzinfo') else d)>=doze_meses) if not divs.empty else 0
+        payout = div_12m/lpa if lpa>0 else 0
         
-        div_anual = lpa * payout_medio
+        fcf = info.get('freeCashflow',0)
+        shares = info.get('sharesOutstanding',0)
+        fcf_acao = fcf/shares if shares>0 and fcf>0 else 0
         
-        confianca = 0.5
-        if lpa > 0:
-            confianca += 0.2
-        if 0.30 <= payout_medio <= 0.80:
-            confianca += 0.2
-        if len(dividendos) >= 20:
-            confianca += 0.1
-        confianca = min(confianca, 1.0)
+        roe = info.get('returnOnEquity',0)
+        score = min(100, max(0, int(roe*300 + (1 if fcf_acao>0 else 0)*20 + (1 if payout<0.60 else 0)*20)))
         
-        doze_meses = hoje - timedelta(days=365)
-        pagamentos = sum(
-            1 for d in dividendos.index
-            if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= doze_meses
-        )
+        status = "🟢" if ey>0.15 and upside>0.30 and payout<0.60 else "🟡" if ey>0.12 and upside>0.20 and payout<1.00 else "🔴"
         
-        frequencia = 4 if pagamentos >= 4 else 2 if pagamentos >= 2 else 1
-        proximo = div_anual / frequencia
-        
-        return div_anual, payout_medio, lpa, confianca, proximo
-    
-    except Exception as e:
-        logger.error(f"❌ Erro estimar dividendo {ticker}: {e}")
-        return 0, 0, 0, 0, 0
+        return {"ticker":ticker,"preco":preco,"ey":ey,"upside":upside,"payout":payout,"fcf_acao":fcf_acao,"score":score,"status":status,"div_12m":div_12m}
+    except: return None
 
-# ==============================================================================
-# FUNÇÕES DE ANÁLISE FUNDAMENTISTA
-# ==============================================================================
-
-def analisar_ativo(ticker):
-    """Analisa ativo com Earnings Yield e DCF"""
+def verificar_sustentabilidade(ticker):
     try:
         acao = yf.Ticker(f"{ticker}.SA")
         info = acao.info
         
-        preco = info.get('currentPrice', info.get('regularMarketPrice', 0))
+        lpa = info.get('trailingEps',0)
+        divs = acao.dividends
+        doze_meses = datetime.now()-timedelta(days=365)
+        div_12m = sum(v for d,v in divs.items() if (d.replace(tzinfo=None) if hasattr(d,'tzinfo') else d)>=doze_meses) if not divs.empty else 0
         
-        # ==========================================================================
-        # DADOS BÁSICOS
-        # ==========================================================================
-        dividendos = acao.dividends
-        doze_meses = datetime.now() - timedelta(days=365)
+        payout = div_12m/lpa if lpa>0 else 0
         
-        div_12m = sum(
-            v for d, v in dividendos.items()
-            if (d.replace(tzinfo=None) if hasattr(d, 'tzinfo') else d) >= doze_meses
-        ) if not dividendos.empty else 0
+        fcf = info.get('freeCashflow',0)
+        shares = info.get('sharesOutstanding',0)
+        fcf_acao = fcf/shares if shares>0 else 0
         
-        dy = div_12m / preco if preco > 0 else 0
+        cobertura = fcf_acao/div_12m if div_12m>0 and fcf_acao>0 else 0
         
-        # ==========================================================================
-        # EARNINGS YIELD (E/P)
-        # ==========================================================================
-        lpa = info.get('trailingEps', 0)
-        earnings_yield = lpa / preco if preco > 0 and lpa > 0 else 0
+        if payout < 0.60 and fcf_acao > div_12m: status = "🟢"
+        elif payout < 1.00 and fcf_acao > 0: status = "🟡"
+        elif payout >= 1.00 or fcf_acao <= 0: status = "🔴"
+        else: status = "⚪"
         
-        # ==========================================================================
-        # MÉDIA 200 DIAS
-        # ==========================================================================
-        media_200d = info.get('twoHundredDayAverage', 0)
-        
-        if media_200d <= 0:
-            try:
-                hist = acao.history(period="1y")
-                if len(hist) >= 200:
-                    media_200d = hist['Close'].iloc[-200:].mean()
-                elif len(hist) > 0:
-                    media_200d = hist['Close'].mean()
-            except:
-                media_200d = 0
-        
-        if media_200d > 0:
-            distancia_media_200d = (preco - media_200d) / media_200d
-        else:
-            distancia_media_200d = 0
-        
-        # ==========================================================================
-        # DADOS FUNDAMENTALISTAS
-        # ==========================================================================
-        div_anual, payout, lpa, confianca, proximo = estimar_dividendo(ticker)
-        eps = info.get('trailingEps', 0)
-        payout_ratio = min(div_12m / eps, 1.0) if eps > 0 else 0
-        
-        # ==========================================================================
-        # FLUXO DE CAIXA (para DCF)
-        # ==========================================================================
-        fcf = info.get('freeCashflow', 0)
-        shares = info.get('sharesOutstanding', 0)
-        fcf_por_acao = fcf / shares if shares > 0 and fcf > 0 else 0
-        
-        return {
-            "ticker": ticker,
-            "nome": info.get('longName', ticker),
-            "preco": preco,
-            "dividend_yield": dy,
-            "dividendos_12m": div_12m,
-            "proximo_dividendo": proximo,
-            "confianca": confianca,
-            "ex_dividend_date": info.get('exDividendDate'),
-            "payout_ratio": payout_ratio,
-            "pe_ratio": info.get('trailingPE', 0),
-            "pb_ratio": info.get('priceToBook', 0),
-            "eps": eps,
-            "price_target": info.get('targetMeanPrice', 0),
-            "beta": info.get('beta', 1.0),
-            "roe": info.get('returnOnEquity', 0),
-            "margem": info.get('profitMargins', 0),
-            "divida_equity": info.get('debtToEquity', 0),
-            "crescimento": info.get('revenueGrowth', 0),
-            "upside": (info.get('targetMeanPrice', 0) - preco) / preco if preco > 0 and info.get('targetMeanPrice', 0) > 0 else 0,
-            
-            "media_200d": media_200d,
-            "distancia_media_200d": distancia_media_200d,
-            
-            "fcf_por_acao": fcf_por_acao,
-            "earnings_yield": earnings_yield,
-        }
-    
-    except Exception as e:
-        logger.error(f"❌ Erro analisar {ticker}: {e}")
-        return None
+        return {'ticker':ticker,'payout':payout,'cobertura':cobertura,'status':status}
+    except: return None
 
 # ==============================================================================
-# FUNÇÕES DE DCF
-# ==============================================================================
-
-def calcular_dcf(dados, taxa_desconto=DCF_TAXA_DESCONTO, crescimento_perpetuo=DCF_CRESCIMENTO_PERPETUO):
-    """Calcula preço justo por DCF"""
-    try:
-        fcf_atual = dados.get('fcf_por_acao', 0)
-        
-        if fcf_atual <= 0:
-            return 0
-        
-        # Crescimento estimado
-        cresc = dados.get('crescimento', 0.05)
-        cresc = min(cresc, 0.15)
-        cresc = max(cresc, 0.02)
-        
-        # Projeta FCF para os próximos 5 anos
-        valor_presente = 0
-        fcf_ano = fcf_atual
-        
-        for ano in range(1, DCF_ANOS_PROJECAO + 1):
-            fcf_ano = fcf_ano * (1 + cresc)
-            vp = fcf_ano / ((1 + taxa_desconto) ** ano)
-            valor_presente += vp
-        
-        # Valor Terminal
-        fcf_terminal = fcf_ano * (1 + crescimento_perpetuo)
-        valor_terminal = fcf_terminal / (taxa_desconto - crescimento_perpetuo)
-        vp_terminal = valor_terminal / ((1 + taxa_desconto) ** DCF_ANOS_PROJECAO)
-        
-        preco_justo = valor_presente + vp_terminal
-        
-        return preco_justo
-    
-    except Exception as e:
-        logger.error(f"❌ Erro DCF: {e}")
-        return 0
-
-# ==============================================================================
-# FUNÇÕES DE FACTOR INVESTING
-# ==============================================================================
-
-def calcular_score(dados, historico, config):
-    """Calcula score de Factor Investing (0-100)"""
-    
-    # Quality (30%)
-    roe = dados.get("roe", 0)
-    payout = dados.get("payout_ratio", 0)
-    margem = dados.get("margem", 0)
-    divida = dados.get("divida_equity", 0)
-    cresc = dados.get("crescimento", 0)
-    
-    score_roe = 100 if roe > 0.20 else 80 if roe > 0.15 else 60 if roe > 0.10 else 40 if roe > 0.05 else 20
-    score_payout = 100 if 0.30 <= payout <= 0.60 else 80 if 0.20 <= payout <= 0.70 else 60 if 0.10 <= payout <= 0.80 else 40
-    score_margem = 100 if margem > 0.20 else 80 if margem > 0.15 else 60 if margem > 0.10 else 40 if margem > 0.05 else 20
-    score_divida = 100 if divida < 0.5 else 80 if divida < 1.0 else 60 if divida < 1.5 else 40 if divida < 2.0 else 20
-    score_cresc = 100 if cresc > 0.15 else 80 if cresc > 0.10 else 60 if cresc > 0.05 else 40 if cresc > 0 else 20
-    
-    score_quality = score_roe * 0.30 + score_payout * 0.20 + score_margem * 0.20 + score_divida * 0.20 + score_cresc * 0.10
-    
-    # Low Vol (25%)
-    beta = dados.get("beta", 1.0)
-    score_beta = 100 if beta < 0.8 else 80 if beta < 1.0 else 60 if beta < 1.2 else 40 if beta < 1.5 else 20
-    
-    try:
-        vol = historico['Close'].pct_change().std() * np.sqrt(252) if len(historico) > 0 else 0.5
-    except:
-        vol = 0.5
-    
-    score_vol = 100 if vol < 0.20 else 80 if vol < 0.30 else 60 if vol < 0.40 else 40 if vol < 0.50 else 20
-    
-    try:
-        dd = (historico['Close'].max() - historico['Close'].iloc[-1]) / historico['Close'].max() if len(historico) > 0 else 0.5
-    except:
-        dd = 0.5
-    
-    score_dd = 100 if dd < 0.10 else 80 if dd < 0.20 else 60 if dd < 0.30 else 40 if dd < 0.40 else 20
-    
-    score_low_vol = score_beta * 0.40 + score_vol * 0.30 + score_dd * 0.30
-    
-    # Value (20%)
-    pe = dados.get("pe_ratio", 0)
-    pvp = dados.get("pb_ratio", 0)
-    ev = dados.get("ev_ebitda", 0)
-    
-    p_l_justo = config.get("p_l_justo", 8.0)
-    p_vp_justo = config.get("p_vp_justo", 1.2)
-    
-    score_pe = 100 if pe > 0 and pe < p_l_justo * 0.5 else 80 if pe > 0 and pe < p_l_justo * 0.75 else 60 if pe > 0 and pe < p_l_justo else 40 if pe > 0 and pe < p_l_justo * 1.25 else 20
-    
-    score_pvp = 100 if pvp > 0 and pvp < p_vp_justo * 0.5 else 80 if pvp > 0 and pvp < p_vp_justo * 0.75 else 60 if pvp > 0 and pvp < p_vp_justo else 40 if pvp > 0 and pvp < p_vp_justo * 1.25 else 20
-    
-    score_ev = 100 if ev > 0 and ev < 5 else 80 if ev > 0 and ev < 8 else 60 if ev > 0 and ev < 12 else 40 if ev > 0 and ev < 15 else 20
-    
-    score_value = score_pe * 0.40 + score_pvp * 0.30 + score_ev * 0.30
-    
-    # Dividend (15%)
-    dy = dados.get("dividend_yield", 0)
-    score_dy = 100 if dy > 0.10 else 80 if dy > 0.08 else 60 if dy > 0.06 else 40 if dy > 0.04 else 20
-    
-    dy_medio = config.get("dy_medio", 0.06)
-    score_consist = 100 if dy >= dy_medio else 80 if dy >= dy_medio * 0.8 else 60
-    
-    score_dividend = score_dy * 0.50 + score_payout * 0.30 + score_consist * 0.20
-    
-    # Momentum (10%)
-    try:
-        ret = (historico['Close'].iloc[-1] - historico['Close'].iloc[0]) / historico['Close'].iloc[0] if len(historico) > 0 else 0
-    except:
-        ret = 0
-    
-    score_ret = 100 if ret > 0.30 else 80 if ret > 0.15 else 60 if ret > 0 else 40 if ret > -0.15 else 20
-    
-    try:
-        dist = (historico['Close'].iloc[-1] - historico['Close'].max()) / historico['Close'].max() if len(historico) > 0 else 0
-    except:
-        dist = 0
-    
-    score_dist = 100 if dist > -0.10 else 80 if dist > -0.20 else 60 if dist > -0.30 else 40 if dist > -0.40 else 20
-    
-    score_momentum = score_ret * 0.60 + score_dist * 0.40
-    
-    # Score Total
-    score_total = (
-        score_quality * 0.30 +
-        score_low_vol * 0.25 +
-        score_value * 0.20 +
-        score_dividend * 0.15 +
-        score_momentum * 0.10
-    )
-    
-    # Classificação
-    if score_total >= 80:
-        classif = "🟢 EXCELENTE"
-    elif score_total >= 70:
-        classif = "🟡 MUITO BOM"
-    elif score_total >= 60:
-        classif = "🟠 BOM"
-    elif score_total >= 50:
-        classif = "🔴 REGULAR"
-    else:
-        classif = "⚫ RUIM"
-    
-    return {
-        "score_total": score_total,
-        "classificacao": classif,
-        "fatores": {
-            "quality": score_quality,
-            "low_vol": score_low_vol,
-            "value": score_value,
-            "dividend": score_dividend,
-            "momentum": score_momentum
-        }
-    }
-
-# ==============================================================================
-# FUNÇÃO PARA DEFINIR STATUS
-# ==============================================================================
-
-def definir_status(earnings_yield, upside):
-    """Define status baseado em E/Y e Upside"""
-    if earnings_yield > 0.15 and upside > 0.30:
-        return "🟢"  # Strong Buy
-    elif earnings_yield > 0.12 and upside > 0.20:
-        return "🟢"  # Buy
-    elif earnings_yield > 0.08 and upside > 0.10:
-        return "🟡"  # Hold
-    else:
-        return "🔴"  # Sell
-
-# ==============================================================================
-# FUNÇÃO PRINCIPAL
+# MAIN
 # ==============================================================================
 
 def main():
-    """Função principal do bot"""
+    hoje = datetime.now()
+    hoje_str = hoje.strftime("%d/%m/%Y")
+    hoje_semana = hoje.weekday()
     
-    logger.info("="*60)
-    logger.info(f"🤖 RADAR IDIV v16.0 - {len(MEUS_PAPEIS)} ativos")
-    logger.info("="*60)
-    
-    # Envia mensagem de início
-    hoje = datetime.now().strftime("%d/%m/%Y")
-    hoje_dia = datetime.now().day
-    hoje_semana = datetime.now().weekday()
-    
-    # Verifica se é dia útil (segunda a sexta)
-    if hoje_semana >= 5:  # Sábado (5) ou Domingo (6)
+    if hoje_semana >= 5:
         logger.info("⚠️ Fim de semana - sem monitoramento")
         return
     
-    enviar_telegram(
-        f"🤖 *Radar IDIV | {hoje}*\n"
-        f"Iniciando monitoramento de {len(MEUS_PAPEIS)} ativos..."
-    )
+    enviar(f"🤖 *Radar IDIV* | {hoje_str}\nIniciando monitoramento de {len(MEUS_ATIVOS)} ativos...")
     
-    # Listas para acumular dados
-    todos_dados = []
-    dados_data_com = []
-    dados_com_score = []
+    resultados, dados_com = [], []
     
-    # Verifica rotinas
-    e_segunda = hoje_semana == 0
-    e_dia_15 = hoje_dia == 15
-    
-    # ==========================================================================
-    # LOOP PRINCIPAL
-    # ==========================================================================
-    for papel in MEUS_PAPEIS:
-        ticker = papel["ticker"]
+    for ticker in MEUS_ATIVOS:
         logger.info(f"📊 Analisando {ticker}...")
-        
-        dados = analisar_ativo(ticker)
-        if not dados:
-            logger.warning(f"⚠️ Sem dados para {ticker}")
-            continue
-        
-        # Pega histórico 6 meses
-        acao = yf.Ticker(f"{ticker}.SA")
-        historico = acao.history(period="6mo")
+        dados = analisar(ticker)
+        if not dados: continue
         
         # Data COM
-        if dados.get("proximo_dividendo", 0) > 0 and dados.get("ex_dividend_date"):
-            data_com = datetime.fromtimestamp(dados["ex_dividend_date"])
-            dias = (data_com - datetime.now()).days
-            
-            if 0 <= dias <= 15:
-                dados_data_com.append({
-                    **dados,
-                    "data_com": data_com.strftime("%d/%m/%Y"),
-                    "dias": dias
-                })
+        if dados.get("div_12m",0)>0:
+            acao = yf.Ticker(f"{ticker}.SA")
+            ex_div = acao.info.get('exDividendDate')
+            if ex_div:
+                data_com = datetime.fromtimestamp(ex_div)
+                dias = (data_com-hoje).days
+                if 0<=dias<=15:
+                    dados_com.append({"ticker":ticker,"data":data_com.strftime("%d/%m"),"dias":dias,"div":dados['div_12m'],"dy":dados['ey']})
         
-        # Score (apenas segundas-feiras)
-        if e_segunda:
-            score = calcular_score(dados, historico, papel)
-            dados["score"] = score
-            dados_com_score.append({**dados, "score": score})
-        
-        # Calcula DCF (apenas dia 15)
-        if e_dia_15:
-            preco_justo = calcular_dcf(dados)
-            dados['preco_justo'] = preco_justo
-            dados['upside_dcf'] = (preco_justo - dados['preco']) / dados['preco'] if dados['preco'] > 0 else 0
-        
-        todos_dados.append(dados)
+        resultados.append(dados)
     
-    # ==========================================================================
-    # ENVIA TABELA DATA COM (QUANDO TIVER)
-    # ==========================================================================
-    if dados_data_com:
-        msg = "💰 *DATA COM*\n"
-        msg += f"{hoje}\n\n"
-        msg += "```\n"
-        msg += f"{'Ativo':<7} | {'Data':<8} | {'Dias':<6} | {'Est. Div':<10} | {'DY':<7}\n"
-        msg += f"{'-'*45}\n"
-        
-        for d in sorted(dados_data_com, key=lambda x: x["dias"]):
-            msg += (
-                f"{d['ticker']:<7} | "
-                f"{d['data_com']:<8} | "
-                f"{d['dias']:>5}  | "
-                f"R$ {d['proximo_dividendo']:>6.4f} | "
-                f"{d['dividend_yield']:>6.2%}\n"
-            )
-        
+    # Data COM
+    if dados_com:
+        msg = f"💰 *DATA COM*\n{hoje_str}\n\n```\n{'Ativo':<7} | {'Data':<8} | {'Dias':<6} | {'Est. Div':<10} | {'DY':<7}\n{'-'*45}\n"
+        for d in sorted(dados_com, key=lambda x:x["dias"]):
+            msg += f"{d['ticker']:<7} | {d['data']:<8} | {d['dias']:>5} | R$ {d['div']:>6.4f} | {d['dy']*100:>6.1f}%\n"
         msg += "```"
-        enviar_telegram(msg)
+        enviar(msg)
     
-    # ==========================================================================
-    # ENVIA RESUMO SEMANAL (SEGUNDAS-FEIRAS)
-    # ==========================================================================
-    if e_segunda and todos_dados:
-        # Ordena por Earnings Yield + Upside
-        todos_ordenados = sorted(
-            todos_dados,
-            key=lambda x: (x.get('earnings_yield', 0) + x.get('upside_dcf', 0)),
-            reverse=True
-        )[:10]
+    # Top 10
+    if resultados:
+        resultados.sort(key=lambda x:(x['ey']+x['upside']), reverse=True)
         
-        msg = "📊 *RESUMO SEMANAL*\n"
-        msg += f"{hoje}\n\n"
-        msg += "Top 10 por Earnings Yield + Upside\n\n"
-        msg += "```\n"
-        msg += f"{'#':<3} | {'Ativo':<7} | {'E/Y':<8} | {'Upside':<9} | {'Score':<6} | {'Status':<6}\n"
-        msg += f"{'-'*50}\n"
+        msg = f"📊 *TOP 10*\n{hoje_str}\n\n```\n{'#':<3} | {'Ativo':<7} | {'E/Y':<7} | {'Upside':<8} | {'Payout':<8} | {'Score':<6} | {'Status':<6}\n{'-'*55}\n"
         
-        for i, d in enumerate(todos_ordenados, 1):
-            ticker = d.get('ticker', 'N/A')
-            ey = d.get('earnings_yield', 0)
-            upside = d.get('upside_dcf', 0) if e_dia_15 else d.get('upside', 0)
-            score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
-            status = definir_status(ey, upside)
+        for i,d in enumerate(resultados[:10],1):
+            payout_status = "🟢" if d['payout']<0.60 else "🟡" if d['payout']<1.00 else "🔴"
+            msg += f"{i:<3} | {d['ticker']:<7} | {d['ey']*100:>6.1f}% | +{d['upside']*100:>6.1f}% | {d['payout']*100:>6.0f}% {payout_status} | {d['score']:>5.0f} | {d['status']:<6}\n"
+        
+        msg += "```\n\n🟢 E/Y>15% + Upside>30% + Payout<60%\n🟡 E/Y>12% + Upside>20% + Payout<100%\n🔴 Abaixo disso\n\n💡 E/Y=LPA/Preço | Upside=Múltiplos | Payout=Sust."
+        enviar(msg)
+    
+    # Sustentabilidade (dia 15)
+    if hoje.day == 15:
+        sus_resultados = []
+        for ticker in MEUS_ATIVOS:
+            sus = verificar_sustentabilidade(ticker)
+            if sus and sus['status'] != "⚪":
+                sus_resultados.append(sus)
+        
+        if sus_resultados:
+            sus_resultados.sort(key=lambda x:x['payout'])
             
-            msg += (
-                f"{i:<3} | "
-                f"{ticker:<7} | "
-                f"{ey*100:>6.1f}%  | "
-                f"+{upside*100:>6.1f}% | "
-                f"{score:>5.0f} | "
-                f"{status:<6}\n"
-            )
-        
-        msg += "```\n"
-        msg += "\n🟢 Strong Buy: E/Y > 15% + Upside > 30%"
-        msg += "\n🟢 Buy: E/Y > 12% + Upside > 20%"
-        msg += "\n🟡 Hold: E/Y > 8% + Upside > 10%"
-        msg += "\n🔴 Sell: E/Y < 8% OU Upside < 10%"
-        enviar_telegram(msg)
-    
-    # ==========================================================================
-    # ENVIA TOP 10 OPORTUNIDADES (DIA 15)
-    # ==========================================================================
-    if e_dia_15 and todos_dados:
-        # Filtra ativos com upside > 10%
-        oportunidades = [d for d in todos_dados if d.get('upside_dcf', 0) > 0.10]
-        
-        # Ordena por maior upside
-        oportunidades_ordenadas = sorted(oportunidades, key=lambda x: x.get('upside_dcf', 0), reverse=True)[:10]
-        
-        if oportunidades_ordenadas:
-            msg = "💎 *TOP 10 OPORTUNIDADES*\n"
-            msg += f"{hoje} | DCF {DCF_TAXA_DESCONTO*100:.0f}% a.a.\n\n"
-            msg += "```\n"
-            msg += f"{'#':<3} | {'Ativo':<7} | {'Upside':<9} | {'E/Y':<8} | {'Score':<6} | {'Status':<6}\n"
-            msg += f"{'-'*50}\n"
+            msg = f"📊 *SUSTENTABILIDADE*\n{hoje_str}\n\n```\n{'#':<3} | {'Ticker':<7} | {'Payout':<8} | {'Cob':<8} | {'Status':<6}\n{'-'*40}\n"
             
-            for i, d in enumerate(oportunidades_ordenadas, 1):
-                ticker = d.get('ticker', 'N/A')
-                upside = d.get('upside_dcf', 0)
-                ey = d.get('earnings_yield', 0)
-                score = d.get('score', {}).get('score_total', 0) if 'score' in d else 0
-                status = definir_status(ey, upside)
-                
-                msg += (
-                    f"{i:<3} | "
-                    f"{ticker:<7} | "
-                    f"+{upside*100:>6.1f}% | "
-                    f"{ey*100:>6.1f}%  | "
-                    f"{score:>5.0f} | "
-                    f"{status:<6}\n"
-                )
+            for i,r in enumerate(sus_resultados[:10],1):
+                cob_str = f"{r['cobertura']:.1f}x" if r['cobertura']>0 else "N/D"
+                msg += f"{i:<3} | {r['ticker']:<7} | {r['payout']*100:>6.0f}%  | {cob_str:<8} | {r['status']:<6}\n"
             
-            msg += "```\n"
-            msg += "\n🟢 Strong Buy: E/Y > 15% + Upside > 30%"
-            msg += "\n🟢 Buy: E/Y > 12% + Upside > 20%"
-            msg += "\n🟡 Hold: E/Y > 8% + Upside > 10%"
-            msg += "\n🔴 Sell: E/Y < 8% OU Upside < 10%"
-            enviar_telegram(msg)
+            msg += f"```\n\n🟢 Payout < 60% + FCF cobre\n🟡 Payout 60-100% + FCF > 0\n🔴 Payout > 100% ou FCF < 0\n\n{len(sus_resultados)}/{len(MEUS_ATIVOS)} analisados"
+            enviar(msg)
     
-    # ==========================================================================
-    # MENSAGEM FINAL
-    # ==========================================================================
-    msg_final = f"✅ *Monitoramento Concluído!*\n\n"
-    msg_final += f"📊 Ativos analisados: {len(todos_dados)}\n"
-    msg_final += f"💰 Data COM: {len(dados_data_com)}\n"
-    msg_final += f"🏆 Ranking: {'✅' if dados_com_score else '❌ (apenas segundas)'}\n"
-    msg_final += f"💎 Oportunidades: {'✅' if e_dia_15 else '❌ (apenas dia 15)'}"
-    
-    enviar_telegram(msg_final)
-    
-    logger.info(f"✅ Fim: monitoramento concluído")
-
-# ==============================================================================
-# EXECUTA
-# ==============================================================================
+    logger.info(f"✅ Enviado: {len(resultados)} ativos")
 
 if __name__ == "__main__":
     main()
