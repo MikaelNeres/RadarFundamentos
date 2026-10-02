@@ -20,7 +20,7 @@ MEUS_ATIVOS = [
     "VBBR3", "SAUD3", "DEXP3", "ITSA4", "PETR4", "BBSE3", "ITUB4", "BBDC4",
     "CPLE3", "VALE3", "CSMG3", "TIMS3", "VIVT3", "CXSE3", "KLBN11", "TAEE11",
     "EGIE3", "CPFE3", "CMIN3", "BMGB4", "ALOS3", "WEGE3", "AURE3", "PASS3",
-    "PSSA3", "RANI3", "KLBN4"
+    "PSSA3", "RANI3", "KLBN4", "POMO4"
 ]
 
 # Configurações P/L justo por ativo
